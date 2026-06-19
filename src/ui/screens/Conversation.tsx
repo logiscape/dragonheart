@@ -169,6 +169,8 @@ export function Conversation() {
           <div className="dh-composer__field">
             <Textarea
               seamless
+              autoGrow
+              maxRows={3}
               rows={1}
               placeholder={`Say something to ${firstName}…`}
               value={draft}
