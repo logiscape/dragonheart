@@ -1,0 +1,43 @@
+/* ============================================================
+   Dragon Heart — Effects: radii, shadows, glows, borders
+   Light is warm and comes from candles, so shadows are warm and
+   soft, and accents *glow* rather than cast hard edges.
+   ============================================================ */
+
+:root {
+  /* Corner radii — soft, organic, never sharp */
+  --radius-xs:   4px;
+  --radius-sm:   8px;
+  --radius-md:   12px;
+  --radius-lg:   18px;
+  --radius-xl:   26px;
+  --radius-2xl:  36px;
+  --radius-full: 999px;
+
+  /* Warm shadows (the dark casts deep, ambered shadow) */
+  --shadow-sm:  0 1px 2px rgba(8, 5, 2, 0.40);
+  --shadow-md:  0 4px 14px rgba(8, 5, 2, 0.45);
+  --shadow-lg:  0 14px 40px rgba(6, 4, 1, 0.55);
+  --shadow-xl:  0 28px 70px rgba(6, 4, 1, 0.62);
+
+  /* Inner shadows for sunken wells (inputs, the inset) */
+  --shadow-inset: inset 0 1px 3px rgba(4, 2, 0, 0.55);
+
+  /* Glows — firelight bleeding into the dark */
+  --glow-ember:    0 0 0 1px rgba(223,145,50,0.30), 0 0 24px -4px rgba(223,145,50,0.45);
+  --glow-ember-sm: 0 0 16px -4px rgba(223,145,50,0.50);
+  --glow-heart:    0 0 28px -6px rgba(186,70,50,0.55);
+  --glow-soft:     0 0 40px -8px rgba(243,194,119,0.22);
+
+  /* Focus ring — a warm ring, never the browser blue */
+  --ring-focus: 0 0 0 2px var(--surface-base), 0 0 0 4px var(--accent);
+
+  /* Hairline borders */
+  --hairline: 1px solid var(--border-subtle);
+  --hairline-gilt: 1px solid var(--border-gilt);
+
+  /* Texture & atmosphere */
+  --grain-opacity: 0.04; /* @kind other */
+  --vignette: radial-gradient(120% 120% at 50% 0%, transparent 40%, rgba(6,4,1,0.55) 100%); /* @kind other */
+  --hearth-glow: radial-gradient(80% 60% at 50% 120%, rgba(223,145,50,0.16), transparent 70%); /* @kind other */
+}

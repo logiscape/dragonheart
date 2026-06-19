@@ -1,0 +1,107 @@
+/* ============================================================
+   Dragon Heart — Light theme: "The Luminous Realm"
+   Opt-in via [data-theme="light"] on <html> (or any ancestor).
+
+   Where the dark theme is a candlelit room, the light theme is a
+   glade at the threshold of a magical realm: airy luminous
+   parchment, dawn-gold light, and a breath of enchanted amethyst
+   and celadon mist. Warm ink keeps the character's voice fully
+   legible — the magic is in the *light*, not in tinted text.
+
+   This file re-maps the SEMANTIC aliases (and softens shadows into
+   luminous blooms). The raw color scales in colors.css are shared
+   by both themes. A short block at the end re-tunes a few
+   components whose contrast was set for the dark room.
+   ============================================================ */
+
+[data-theme="light"] {
+  /* Surfaces — luminous parchment, brightening toward the page */
+  --surface-base:      #efe9dc;
+  --surface-raised:    #f5f0e6;
+  --surface-card:      #fbf7ee;
+  --surface-overlay:   #fffefa;
+  --surface-inset:     #e8e1d1;
+  --surface-parchment: #fffdf6;
+  --surface-scrim:     rgba(58, 46, 28, 0.30);
+
+  /* Text — warm ink for full legibility on light */
+  --text-primary:   #2a2016;
+  --text-secondary: #574a37;
+  --text-muted:     #837258;
+  --text-faint:     #a3947a;
+  --text-on-ember:  #2a1a08;
+  --text-on-parch:  #2a2016;
+  --text-link:      var(--ember-700);
+
+  /* Brand accents — fills keep their hue; tinted fills lighten */
+  --accent:        var(--ember-500);
+  --accent-hover:  var(--ember-600);
+  --accent-press:  var(--ember-700);
+  --accent-soft:   rgba(223, 145, 50, 0.16);
+  --accent-line:   rgba(194, 118, 31, 0.42);
+  --heart:         var(--garnet-500);
+  --heart-soft:    rgba(186, 70, 50, 0.13);
+  --aura:          var(--aura-500);
+  --aura-soft:     rgba(141, 125, 200, 0.18);
+
+  /* Lines — warm hairlines that read on light */
+  --border-subtle: rgba(74, 58, 30, 0.10);
+  --border-soft:   rgba(74, 58, 30, 0.16);
+  --border-strong: rgba(74, 58, 30, 0.26);
+  --border-gilt:   rgba(194, 118, 31, 0.48);
+
+  /* Semantic states — deepened for contrast on light */
+  --success: var(--moss-600);
+  --warning: var(--ember-700);
+  --danger:  var(--garnet-600);
+  --info:    var(--arcane-500);
+  --success-soft: rgba(107, 134, 79, 0.16);
+  --danger-soft:  rgba(186, 70, 50, 0.13);
+  --info-soft:    rgba(93, 116, 136, 0.14);
+
+  /* Shadows become soft, luminous, warm — light pools rather than
+     casts hard dark edges */
+  --shadow-sm:  0 1px 2px rgba(120, 96, 52, 0.12);
+  --shadow-md:  0 6px 22px rgba(120, 96, 52, 0.13);
+  --shadow-lg:  0 18px 48px rgba(110, 88, 48, 0.16);
+  --shadow-xl:  0 30px 72px rgba(110, 88, 48, 0.18);
+  --shadow-inset: inset 0 1px 3px rgba(120, 96, 52, 0.14);
+
+  /* Glows — dawn-gold and amethyst blooms (the magic) */
+  --glow-ember:    0 0 0 1px rgba(194,118,31,0.28), 0 0 30px -6px rgba(243,194,119,0.85);
+  --glow-ember-sm: 0 0 18px -4px rgba(243,194,119,0.7);
+  --glow-heart:    0 0 30px -8px rgba(210,98,79,0.5);
+  --glow-soft:     0 0 52px -8px rgba(171,158,219,0.55);
+
+  /* Ambient — an aurora at the threshold instead of a vignette */
+  --vignette:    radial-gradient(120% 110% at 50% -10%, rgba(255,253,247,0.7), transparent 55%); /* @kind other */
+  --hearth-glow: radial-gradient(75% 55% at 50% -8%, rgba(171,158,219,0.30), transparent 70%); /* @kind other */
+}
+
+/* ---- Component re-tuning for the light realm ---------------------
+   Components reference semantic aliases for most things, but a few
+   use raw light-on-dark scale values that need deepening on light.
+   Attribute+class specificity beats the components' injected rules. */
+
+[data-theme="light"] .dh-badge--ember{ color: var(--ember-700); }
+[data-theme="light"] .dh-badge--heart{ color: var(--garnet-600); }
+[data-theme="light"] .dh-badge--moss{ color: var(--moss-600); }
+[data-theme="light"] .dh-badge--arcane{ color: var(--arcane-500); }
+
+[data-theme="light"] .dh-tag{ background: rgba(74,58,30,0.04); }
+[data-theme="light"] .dh-tag--interactive:hover,
+[data-theme="light"] .dh-tag--selected{ color: var(--ember-700); }
+
+/* White-tint hovers are invisible on light — use a warm dark tint */
+[data-theme="light"] .dh-btn--ghost:hover:not([disabled]){ background: rgba(60,45,20,0.06); }
+[data-theme="light"] .dh-btn--secondary:hover:not([disabled]){ color: var(--ember-700); }
+[data-theme="light"] .dh-iconbtn--ghost:hover:not([disabled]){ background: rgba(60,45,20,0.06); }
+[data-theme="light"] .dh-dialog__close:hover{ background: rgba(60,45,20,0.06); }
+[data-theme="light"] .dh-tag__remove:hover{ background: rgba(60,45,20,0.10); }
+
+/* Conversation voice */
+[data-theme="light"] .dh-msg__name{ color: var(--ember-700); }
+[data-theme="light"] .dh-msg--dropcap .dh-msg__text:first-of-type::first-letter{ color: var(--ember-600); }
+
+/* Tabs */
+[data-theme="light"] .dh-tabs__tab--active{ color: var(--ember-700); }

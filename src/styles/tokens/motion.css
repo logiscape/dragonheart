@@ -1,0 +1,47 @@
+/* ============================================================
+   Dragon Heart — Motion
+   Motion is calm and breathing, never snappy. Things arrive like
+   candlelight settling. Reserve quick easing for tiny feedback;
+   use slow, gentle easing for anything the user dwells on.
+   ============================================================ */
+
+:root {
+  /* Durations */
+  --dur-instant: 90ms;   /* @kind other */
+  --dur-quick:   180ms;  /* @kind other */
+  --dur-base:    320ms;  /* @kind other */
+  --dur-slow:    560ms;  /* @kind other */
+  --dur-breath:  4200ms; /* @kind other */ /* the slow presence "breathing" loop */
+
+  /* Easings */
+  --ease-gentle: cubic-bezier(0.22, 1, 0.36, 1); /* @kind other */
+  --ease-soft:   cubic-bezier(0.4, 0, 0.2, 1);   /* @kind other */
+  --ease-out:    cubic-bezier(0, 0, 0.2, 1);     /* @kind other */
+  --ease-in:     cubic-bezier(0.4, 0, 1, 1);     /* @kind other */
+
+  /* Standard transitions */
+  --transition-control: color var(--dur-quick) var(--ease-soft),
+                        background-color var(--dur-quick) var(--ease-soft),
+                        border-color var(--dur-quick) var(--ease-soft),
+                        box-shadow var(--dur-quick) var(--ease-soft),
+                        transform var(--dur-quick) var(--ease-gentle); /* @kind other */
+}
+
+/* The breathing glow used on character presence. */
+@keyframes dh-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.04); }
+}
+
+/* Gentle rise used for entrances. */
+@keyframes dh-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Ember flicker for small accents. */
+@keyframes dh-flicker {
+  0%, 100% { opacity: 0.9; }
+  45%      { opacity: 0.7; }
+  70%      { opacity: 1; }
+}

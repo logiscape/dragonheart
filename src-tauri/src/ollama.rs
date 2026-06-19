@@ -1,0 +1,108 @@
+//! Thin, dumb proxy between the TypeScript engine and the local Ollama server.
+//!
+//! All prompt assembly, model selection, and context budgeting live in the TS
+//! engine. Rust only forwards HTTP and — for chat — streams the NDJSON response
+//! back to the webview a token at a time via a Tauri `Channel`. Going through
+//! Rust (rather than `fetch` in the webview) sidesteps CORS entirely and gives
+//! us reliable streaming.
+
+use serde_json::Value;
+use tauri::ipc::Channel;
+
+fn client() -> reqwest::Client {
+    reqwest::Client::new()
+}
+
+fn join(base_url: &str, path: &str) -> String {
+    format!("{}{}", base_url.trim_end_matches('/'), path)
+}
+
+/// GET a JSON endpoint (e.g. `/api/tags`, `/api/version`).
+#[tauri::command]
+pub async fn ollama_get(base_url: String, path: String) -> Result<Value, String> {
+    let url = join(&base_url, &path);
+    let resp = client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach Ollama at {url}: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("Ollama GET {path} → {status}"));
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+/// POST a JSON body to a non-streaming endpoint (e.g. `/api/embed`).
+#[tauri::command]
+pub async fn ollama_post(base_url: String, path: String, body: Value) -> Result<Value, String> {
+    let url = join(&base_url, &path);
+    let resp = client()
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach Ollama at {url}: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("Ollama POST {path} → {status}: {text}"));
+    }
+    serde_json::from_str::<Value>(&text).map_err(|e| format!("Bad JSON from Ollama: {e}"))
+}
+
+/// POST `/api/chat` with `stream: true` and forward each NDJSON object to the
+/// frontend through `on_event`. Each event is a raw Ollama chat chunk
+/// (`{ message: { content }, done, eval_count, ... }`).
+#[tauri::command]
+pub async fn ollama_chat_stream(
+    base_url: String,
+    mut body: Value,
+    on_event: Channel<Value>,
+) -> Result<(), String> {
+    let url = join(&base_url, "/api/chat");
+    if let Value::Object(ref mut map) = body {
+        map.insert("stream".into(), Value::Bool(true));
+    }
+
+    let resp = client()
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach Ollama at {url}: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Ollama chat → {status}: {text}"));
+    }
+
+    let mut resp = resp;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("Stream interrupted: {e}"))?
+    {
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=pos).collect();
+            emit_line(&line, &on_event);
+        }
+    }
+    if !buf.is_empty() {
+        emit_line(&buf, &on_event);
+    }
+    Ok(())
+}
+
+fn emit_line(line: &[u8], on_event: &Channel<Value>) {
+    let text = String::from_utf8_lossy(line);
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    if let Ok(v) = serde_json::from_str::<Value>(text) {
+        let _ = on_event.send(v);
+    }
+}

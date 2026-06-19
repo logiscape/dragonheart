@@ -1,0 +1,10 @@
+/* ============================================================
+   Dragon Heart — Webfonts
+   The brand fonts are all served from Google Fonts. They are
+   genuine choices, not stand-ins, but the binaries are not
+   self-hosted in this project yet — see CAVEATS in readme.md.
+   Consumers need network access for fonts to resolve, or should
+   drop self-hosted @font-face rules here.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,400;1,500&family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');

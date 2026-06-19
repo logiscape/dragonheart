@@ -1,0 +1,115 @@
+/* ============================================================
+   Dragon Heart — Color System
+   A candlelit palette: warm ink, firelight ember, dragon-heart
+   garnet, and aged parchment. Dark is the primary mode (the app
+   is a dim, hearthside space); parchment surfaces appear for
+   "letter" and manuscript moments.
+   ============================================================ */
+
+:root {
+  /* ---- Ink (warm near-blacks, the base of the world) ---- */
+  --ink-950: #100c08;
+  --ink-900: #16110b;
+  --ink-850: #1b150e;
+  --ink-800: #211a12;
+  --ink-700: #2b2218;
+  --ink-600: #382c1f;
+  --ink-500: #4a3a29;
+
+  /* ---- Parchment (aged warm light) ---- */
+  --parch-50:  #f8f2e6;
+  --parch-100: #f1e8d6;
+  --parch-200: #e7d9be;
+  --parch-300: #d9c6a3;
+  --parch-400: #c4ad84;
+
+  /* ---- Ember (firelight — primary accent) ---- */
+  --ember-200: #f8d9a0;
+  --ember-300: #f3c277;
+  --ember-400: #eaa94d;
+  --ember-500: #df9132;   /* primary */
+  --ember-600: #c2761f;
+  --ember-700: #9a5b16;
+
+  /* ---- Garnet (the dragon heart — emotional warmth & danger) ---- */
+  --garnet-300: #df8b75;
+  --garnet-400: #d2624f;
+  --garnet-500: #ba4632;
+  --garnet-600: #9b3422;
+  --garnet-700: #762517;
+
+  /* ---- Moss (a quiet verdigris — growth, success, the arcane) ---- */
+  --moss-300: #a8bd92;
+  --moss-400: #87a06d;
+  --moss-500: #6b864f;
+  --moss-600: #51683b;
+
+  /* ---- Arcane (dusty, muted blue — rare cool note, info) ---- */
+  --arcane-300: #9fb3c4;
+  --arcane-400: #7891a8;
+  --arcane-500: #5d7488;
+
+  /* ---- Aura (enchanted amethyst — the magical light realm) ---- */
+  --aura-200: #e2ddf4;
+  --aura-300: #c8c0ea;
+  --aura-400: #ab9edb;
+  --aura-500: #8d7dc8;
+  --aura-600: #6f5fab;
+
+  /* ---- Warm neutrals (taupes between ink and parchment) ---- */
+  --taupe-100: #cabfab;
+  --taupe-200: #ab9d83;
+  --taupe-300: #8a7c64;
+  --taupe-400: #685c48;
+  --taupe-500: #4c4232;
+
+  /* ========================================================
+     Semantic aliases — reference these in components.
+     ======================================================== */
+
+  /* Surfaces (dark, candlelit) */
+  --surface-base:      var(--ink-950);   /* the room */
+  --surface-raised:    var(--ink-850);   /* panels, sidebars */
+  --surface-card:      var(--ink-800);   /* cards, message wells */
+  --surface-overlay:   var(--ink-700);   /* dialogs, popovers */
+  --surface-inset:     var(--ink-900);   /* inputs, sunken wells */
+  --surface-parchment: var(--parch-50);  /* letters, the Soul page */
+  --surface-scrim:     rgba(8, 6, 3, 0.66);
+
+  /* Text on dark */
+  --text-primary:   var(--parch-100);
+  --text-secondary: var(--taupe-100);
+  --text-muted:     var(--taupe-300);
+  --text-faint:     var(--taupe-400);
+  --text-on-ember:  var(--ink-950);
+  --text-on-parch:  var(--ink-850);
+  --text-link:      var(--ember-300);
+
+  /* Brand accents */
+  --accent:           var(--ember-500);
+  --accent-hover:     var(--ember-400);
+  --accent-press:     var(--ember-600);
+  --accent-soft:      rgba(223, 145, 50, 0.14);
+  --accent-line:      rgba(223, 145, 50, 0.30);
+  --heart:            var(--garnet-500);
+  --heart-soft:       rgba(186, 70, 50, 0.16);
+  --aura:             var(--aura-400);     /* rare enchanted accent */
+  --aura-soft:        rgba(141, 125, 200, 0.16);
+
+  /* Lines & borders */
+  --border-subtle: rgba(241, 232, 214, 0.08);
+  --border-soft:   rgba(241, 232, 214, 0.14);
+  --border-strong: rgba(241, 232, 214, 0.22);
+  --border-gilt:   rgba(223, 145, 50, 0.38);
+
+  /* Semantic states */
+  --success: var(--moss-400);
+  --warning: var(--ember-400);
+  --danger:  var(--garnet-400);
+  --info:    var(--arcane-400);
+
+  /* Fills for state surfaces */
+  --success-soft: rgba(135, 160, 109, 0.16);
+  --danger-soft:  rgba(210, 98, 79, 0.16);
+  --info-soft:    rgba(120, 145, 168, 0.16);
+}

@@ -1,0 +1,13 @@
+/* ============================================================
+   Dragon Heart Design System — token manifest.
+   The single import that pulls in every design token. Component
+   CSS is injected at runtime by each component (see ui/ds/_inject).
+   ============================================================ */
+
+@import "./tokens/fonts.css";
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";
+@import "./tokens/effects.css";
+@import "./tokens/motion.css";
+@import "./tokens/theme-light.css";

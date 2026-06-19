@@ -1,0 +1,71 @@
+/* ============================================================
+   Dragon Heart — Typography
+   Three voices:
+   - Display serif (Cormorant Garamond): character names, titles,
+     the big ethereal moments. High contrast, fantasy-literary.
+   - Reading serif (Spectral): conversation, body, the voice of
+     the character. Warm, screen-built, comfortable at length.
+   - UI sans (Hanken Grotesk): quiet chrome — labels, buttons,
+     metadata. It recedes so the words can breathe.
+   - Mono (JetBrains Mono): the studio, Soul Documents, anything
+     that reveals the machinery behind the curtain.
+   ============================================================ */
+
+:root {
+  --font-display: "Cormorant Garamond", "Spectral", Georgia, serif;
+  --font-serif:   "Spectral", Georgia, "Times New Roman", serif;
+  --font-sans:    "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Type scale (rem, 16px base) — generous, editorial steps */
+  --text-2xs: 0.6875rem;  /* 11 — micro labels */
+  --text-xs:  0.75rem;    /* 12 */
+  --text-sm:  0.875rem;   /* 14 */
+  --text-md:  1rem;       /* 16 — base UI */
+  --text-lg:  1.1875rem;  /* 19 — reading body */
+  --text-xl:  1.5rem;     /* 24 */
+  --text-2xl: 2rem;       /* 32 */
+  --text-3xl: 2.75rem;    /* 44 */
+  --text-4xl: 3.75rem;    /* 60 */
+  --text-5xl: 5rem;       /* 80 — character name hero */
+
+  /* Weights */
+  --weight-light:    300;
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* Line heights */
+  --leading-tight:   1.08;
+  --leading-snug:    1.28;
+  --leading-normal:  1.5;
+  --leading-relaxed: 1.7;   /* conversation reading */
+
+  /* Letter spacing */
+  --tracking-tight:  -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide:   0.04em;
+  --tracking-caps:   0.16em;  /* small-caps labels — an illuminated touch */
+
+  /* ---- Semantic type roles ---- */
+  --type-hero-family:    var(--font-display);
+  --type-hero-weight:    var(--weight-light);
+  --type-hero-leading:   var(--leading-tight);
+
+  --type-title-family:   var(--font-display);
+  --type-title-weight:   var(--weight-medium);
+
+  --type-body-family:    var(--font-serif);
+  --type-body-size:      var(--text-lg);
+  --type-body-leading:   var(--leading-relaxed);
+
+  --type-ui-family:      var(--font-sans);
+  --type-ui-weight:      var(--weight-medium);
+
+  --type-label-family:   var(--font-sans);
+  --type-label-weight:   var(--weight-semibold);
+  --type-label-tracking: var(--tracking-caps);
+
+  --type-mono-family:    var(--font-mono);
+}

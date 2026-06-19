@@ -1,0 +1,40 @@
+/* ============================================================
+   Dragon Heart — Spacing & Layout
+   A 4px base rhythm. Conversation spaces favor generous, calm
+   spacing — room to breathe, not dense dashboards.
+   ============================================================ */
+
+:root {
+  --space-0:  0;
+  --space-1:  0.25rem;  /* 4 */
+  --space-2:  0.5rem;   /* 8 */
+  --space-3:  0.75rem;  /* 12 */
+  --space-4:  1rem;     /* 16 */
+  --space-5:  1.5rem;   /* 24 */
+  --space-6:  2rem;     /* 32 */
+  --space-7:  2.5rem;   /* 40 */
+  --space-8:  3rem;     /* 48 */
+  --space-9:  4rem;     /* 64 */
+  --space-10: 5.5rem;   /* 88 */
+  --space-11: 7rem;     /* 112 */
+
+  /* Component-level rhythm */
+  --gap-tight:   var(--space-2);
+  --gap-base:    var(--space-4);
+  --gap-loose:   var(--space-6);
+
+  --pad-control: var(--space-3);   /* inner padding of buttons/inputs */
+  --pad-card:    var(--space-5);
+  --pad-panel:   var(--space-6);
+
+  /* Layout measures */
+  --measure-reading: 64ch;   /* conversation column width */
+  --measure-narrow:  44ch;
+  --sidebar-width:   312px;
+  --studio-width:    420px;
+
+  /* Container max widths */
+  --container-sm: 640px;
+  --container-md: 900px;
+  --container-lg: 1200px;
+}

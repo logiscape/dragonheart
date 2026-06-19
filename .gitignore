@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+dist-ssr/
+*.local
+
+# rust / tauri
+src-tauri/target/
+src-tauri/gen/
+
+# design system is extracted from the committed zip for reference only
+.design-system/
+
+# editor / os
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+npm-debug.log*

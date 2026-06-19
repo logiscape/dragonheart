@@ -1,0 +1,27 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <radialGradient id="hb-hearth" cx="50%" cy="118%" r="78%">
+      <stop offset="0%" stop-color="#3a2a16"></stop>
+      <stop offset="34%" stop-color="#241a10"></stop>
+      <stop offset="100%" stop-color="#100c08"></stop>
+    </radialGradient>
+    <radialGradient id="hb-ember" cx="50%" cy="116%" r="48%">
+      <stop offset="0%" stop-color="rgba(223,145,50,0.55)"></stop>
+      <stop offset="55%" stop-color="rgba(186,70,50,0.16)"></stop>
+      <stop offset="100%" stop-color="rgba(16,12,8,0)"></stop>
+    </radialGradient>
+    <radialGradient id="hb-vig" cx="50%" cy="40%" r="75%">
+      <stop offset="55%" stop-color="rgba(16,12,8,0)"></stop>
+      <stop offset="100%" stop-color="rgba(6,4,1,0.7)"></stop>
+    </radialGradient>
+    <filter id="hb-grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"></feTurbulence>
+      <feColorMatrix type="saturate" values="0"></feColorMatrix>
+      <feComponentTransfer><feFuncA type="linear" slope="0.05"></feFuncA></feComponentTransfer>
+    </filter>
+  </defs>
+  <rect width="1600" height="900" fill="url(#hb-hearth)"></rect>
+  <rect width="1600" height="900" fill="url(#hb-ember)"></rect>
+  <rect width="1600" height="900" fill="url(#hb-vig)"></rect>
+  <rect width="1600" height="900" filter="url(#hb-grain)" opacity="0.5"></rect>
+</svg>

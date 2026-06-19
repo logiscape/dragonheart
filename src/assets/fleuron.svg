@@ -1,0 +1,11 @@
+<svg width="40" height="48" viewBox="0 0 40 48" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="fleuron">
+  <g fill="none" stroke="#df9132" stroke-opacity="0.65" stroke-width="1.4" stroke-linecap="round">
+    <path d="M20 6 C20 14, 20 18, 20 24"></path>
+    <path d="M20 24 C12 20, 8 14, 12 9 C16 5, 20 12, 20 18"></path>
+    <path d="M20 24 C28 20, 32 14, 28 9 C24 5, 20 12, 20 18"></path>
+    <circle cx="20" cy="30" r="2.4" fill="#df9132" stroke="none"></circle>
+    <path d="M9 38 H31"></path>
+    <path d="M6 38 C8 38, 8 40, 6 40"></path>
+    <path d="M34 38 C32 38, 32 40, 34 40"></path>
+  </g>
+</svg>
