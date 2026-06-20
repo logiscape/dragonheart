@@ -23,7 +23,7 @@ import {
 } from "./memory";
 import { estimateTokens, estimateMessageTokens } from "./tokens";
 import { parseJsonLoose } from "./util";
-import { soulToPrompt, blankSoul } from "./soul";
+import { soulToPrompt, blankSoul, normalizeSoul } from "./soul";
 import { runProbes, DEFAULT_PROBES, type Probe, type ProbeResult } from "./personaProbe";
 import {
   parseCardBytes,
@@ -222,13 +222,10 @@ Return ONLY JSON with this shape:
       stream: false,
     });
     const parsed = parseJsonLoose<Partial<SoulDocument>>(res.content) ?? {};
-    const soul = blankSoul();
-    return {
-      ...soul,
-      ...parsed,
-      values: Array.isArray(parsed.values) ? parsed.values.filter((v) => typeof v === "string") : [],
-      freeform: "",
-    };
+    // The model can emit null/missing fields; normalize so downstream rendering
+    // (soulToPrompt) never trips on a non-string field. freeform stays empty —
+    // a guided draft is structured, not a verbatim override.
+    return normalizeSoul({ ...parsed, freeform: "" });
   }
 
   // ---------------- relationships / conversations ----------------

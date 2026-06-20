@@ -82,4 +82,19 @@ describe("soul", () => {
     expect(soulIsAuthored(blankSoul())).toBe(false);
     expect(soulIsAuthored(makeSoul())).toBe(true);
   });
+  it("renders souls with null/missing fields without throwing (model-drafted souls)", () => {
+    // A guided draft can carry nulls or omit fields where the model returned
+    // none; these used to crash soulToPrompt on `.trim()` / `.length`, which
+    // broke the very first turn with a newly-created character.
+    const broken = {
+      coreIdentity: null,
+      drives: undefined,
+      values: null,
+      voice: "Soft.",
+    } as unknown as ReturnType<typeof makeSoul>;
+    const c = makeCharacter({ soul: broken });
+    expect(() => soulToPrompt(c)).not.toThrow();
+    expect(() => soulIsAuthored(broken)).not.toThrow();
+    expect(soulToPrompt(c)).toContain("Soft.");
+  });
 });

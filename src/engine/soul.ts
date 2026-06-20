@@ -10,34 +10,47 @@ import type { Character, SoulDocument } from "./types";
 import { estimateTokens } from "./tokens";
 
 export function blankSoul(): SoulDocument {
+  return normalizeSoul({});
+}
+
+/**
+ * Coerce a possibly-partial, possibly model-authored soul into a complete,
+ * string-safe `SoulDocument`. The structured fields are typed `string`, but
+ * model-drafted souls (and older stored rows) can carry `null` or missing
+ * fields; rendering then crashes on `.trim()` / `.length`. Normalizing here
+ * is the single choke point that keeps both reads and authoring safe.
+ */
+export function normalizeSoul(s: Partial<SoulDocument> | null | undefined): SoulDocument {
+  const str = (v: unknown): string => (typeof v === "string" ? v : "");
   return {
-    coreIdentity: "",
-    drives: "",
-    wounds: "",
-    values: [],
-    voice: "",
-    relationalStance: "",
-    knowledge: "",
-    contradiction: "",
-    tells: "",
-    freeform: "",
+    coreIdentity: str(s?.coreIdentity),
+    drives: str(s?.drives),
+    wounds: str(s?.wounds),
+    values: Array.isArray(s?.values) ? s!.values.filter((v): v is string => typeof v === "string") : [],
+    voice: str(s?.voice),
+    relationalStance: str(s?.relationalStance),
+    knowledge: str(s?.knowledge),
+    contradiction: str(s?.contradiction),
+    tells: str(s?.tells),
+    freeform: str(s?.freeform),
   };
 }
 
 /** Is the soul substantive enough to drive a character? Used by authoring UX. */
 export function soulIsAuthored(soul: SoulDocument): boolean {
-  if (soul.freeform && soul.freeform.trim().length > 40) return true;
+  const s = normalizeSoul(soul);
+  if ((s.freeform ?? "").trim().length > 40) return true;
   return Boolean(
-    soul.coreIdentity.trim() ||
-      soul.drives.trim() ||
-      soul.wounds.trim() ||
-      soul.voice.trim(),
+    s.coreIdentity.trim() ||
+      s.drives.trim() ||
+      s.wounds.trim() ||
+      s.voice.trim(),
   );
 }
 
 /** Render the <soul> section of the system prompt. */
 export function soulToPrompt(char: Character): string {
-  const s = char.soul;
+  const s = normalizeSoul(char.soul);
   if (s.freeform && s.freeform.trim()) {
     return s.freeform.trim();
   }
