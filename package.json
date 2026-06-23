@@ -4,6 +4,7 @@
   "version": "0.2.0",
   "type": "module",
   "description": "A warm, local space for being with AI characters who remember you.",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
