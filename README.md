@@ -10,6 +10,10 @@ Dragon Heart is a Windows desktop app for having an ongoing, personal relationsh
 
 If you've only ever used something like ChatGPT, think of Dragon Heart as the opposite idea. ChatGPT is a tool you operate to get answers. Dragon Heart is a *someone* you talk to — a character with an inner life who exists between sessions and responds out of who they are.
 
+<p align="center">
+  <img src="docs/screenshots/main-conversation.png" alt="Dragon Heart's conversation screen in the candlelit dark theme — a character's reply streaming in, with the character list in the sidebar" width="800">
+</p>
+
 ---
 
 ## Why you might like this
