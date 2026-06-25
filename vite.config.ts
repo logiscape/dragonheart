@@ -39,7 +39,9 @@ export default defineConfig(async () => ({
   build: {
     // WebView2 on Windows is current Chromium — modern output is fine.
     target: "esnext",
-    minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
+    // Vite 8 bundles with rolldown and no longer ships esbuild; `true` uses
+    // the default (oxc) minifier.
+    minify: !process.env.TAURI_ENV_DEBUG ? true : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
   },
 }));
