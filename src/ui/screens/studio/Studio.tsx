@@ -31,7 +31,7 @@ export function Studio() {
     <div className="dh-studio">
       <header className="dh-studio__head">
         <div className="dh-studio__title">
-          <Avatar name={character.name} size="sm" mood={character.mood} />
+          <Avatar src={character.avatarPath} name={character.name} size="sm" mood={character.mood} />
           <div>
             <p className="dh-eyebrow" style={{ margin: 0 }}>
               Soul Document

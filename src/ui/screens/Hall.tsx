@@ -48,6 +48,7 @@ export function Hall() {
             >
               <div className="dh-charcard__row">
                 <Avatar
+                  src={c.avatarPath}
                   name={c.name}
                   size="xl"
                   mood={c.mood}

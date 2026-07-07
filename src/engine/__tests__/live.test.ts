@@ -94,12 +94,12 @@ describe.skipIf(!LIVE)("live engine ↔ ollama", () => {
   it("seeds the starter circle", async () => {
     const chars = await engine.listCharacters();
     expect(chars.length).toBeGreaterThanOrEqual(1);
-    expect(chars.some((c) => c.name.includes("Sera"))).toBe(true);
+    expect(chars.some((c) => c.name.includes("Elara"))).toBe(true);
   });
 
   it("opens with an authored greeting and streams a persisted reply", async () => {
-    const sera = (await engine.listCharacters()).find((c) => c.name.includes("Sera"))!;
-    const view = await engine.openCharacter(sera.id);
+    const elara = (await engine.listCharacters()).find((c) => c.name.includes("Elara"))!;
+    const view = await engine.openCharacter(elara.id);
     expect(view.messages[0]?.role).toBe("assistant");
 
     let streamed = "";
@@ -118,7 +118,7 @@ describe.skipIf(!LIVE)("live engine ↔ ollama", () => {
   }, 120_000);
 
   it("produces embeddings for semantic recall", async () => {
-    const emb = await engine.embed("the lighthouse and the sea");
+    const emb = await engine.embed("the dragon on the cornice across the street");
     expect(emb).not.toBeNull();
     expect((emb ?? []).length).toBeGreaterThan(100);
   }, 60_000);
@@ -129,7 +129,7 @@ describe.skipIf(!LIVE)("live engine ↔ ollama", () => {
       makeMessage({ role: "user", content: "My sister is getting married in autumn." }),
       makeMessage({ role: "assistant", content: "That's wonderful — autumn weddings are the loveliest." }),
     ];
-    const { summary } = await summarizeRollup(engine.ollama, "gemma4:e4b", msgs, "Sera", "Tester");
+    const { summary } = await summarizeRollup(engine.ollama, "gemma4:e4b", msgs, "Elara", "Tester");
     expect(summary?.content.length ?? 0).toBeGreaterThan(0);
   }, 120_000);
 });

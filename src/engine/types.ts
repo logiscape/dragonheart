@@ -20,6 +20,26 @@ export type Role = "system" | "user" | "assistant";
 // ---------------------------------------------------------------
 
 /**
+ * A named register the character's voice shifts into, and what flips them
+ * into it. Characters with real interiority don't speak in one mode; this is
+ * what keeps a "shy" character from being uniformly shy.
+ */
+export interface SpeechRegister {
+  /** the situations that trigger this register ("dragons, myth, story-craft") */
+  when: string;
+  /** how the voice actually changes in it ("faster, longer, vivid sentences") */
+  how: string;
+}
+
+/** One exemplar exchange — models imitate cadence from examples far better than from description. */
+export interface DialogueExchange {
+  /** what the other person says */
+  user: string;
+  /** how the character answers, in their true voice */
+  character: string;
+}
+
+/**
  * A schema, not a straitjacket (plan §6). Authors write prose within these
  * fields, OR drop a free-form document into `freeform` to bypass the structure
  * entirely. Behavior emerges from identity, so these describe interiority.
@@ -43,6 +63,10 @@ export interface SoulDocument {
   contradiction: string;
   /** behavioral tells — what they do when frightened, moved, lying */
   tells: string;
+  /** how the voice shifts between situations — the registers of a real person */
+  registers?: SpeechRegister[];
+  /** short exemplar exchanges, injected as few-shots of the voice in practice */
+  exampleDialogue?: DialogueExchange[];
   /** power-user override: when non-empty, used verbatim as the soul section */
   freeform?: string;
 }
@@ -156,6 +180,12 @@ export interface Relationship {
   allowTopicChange: boolean;
   /** lightweight carried emotional state */
   mood: Mood | null;
+  /**
+   * carried feeling: a short first-person note, written by the model after
+   * each exchange, of how the last conversation left the character feeling
+   * about the user — so a slight from last session can still sting today
+   */
+  affect: string | null;
   createdAt: number;
   updatedAt: number;
 }

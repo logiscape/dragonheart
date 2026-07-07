@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Button, Input, Textarea, Switch, Tag, Icons } from "@ui/ds";
 import { useAppState, useStore } from "@state/store";
-import type { SoulDocument } from "@engine/index";
+import type { DialogueExchange, SoulDocument, SpeechRegister } from "@engine/index";
 
 export function SoulTab() {
   const store = useStore();
@@ -27,6 +27,8 @@ export function SoulTab() {
   const [tells, setTells] = useState("");
   const [values, setValues] = useState<string[]>([]);
   const [valueDraft, setValueDraft] = useState("");
+  const [registers, setRegisters] = useState<SpeechRegister[]>([]);
+  const [examples, setExamples] = useState<DialogueExchange[]>([]);
 
   const [sketch, setSketch] = useState("");
   const [imagining, setImagining] = useState(false);
@@ -53,6 +55,8 @@ export function SoulTab() {
     setContradiction(soul.contradiction);
     setTells(soul.tells);
     setValues(soul.values);
+    setRegisters(soul.registers ?? []);
+    setExamples(soul.exampleDialogue ?? []);
     setValueDraft("");
     setSketch("");
     setKept(false);
@@ -103,6 +107,8 @@ export function SoulTab() {
       setContradiction(soul.contradiction);
       setTells(soul.tells);
       setValues(soul.values);
+      setRegisters(soul.registers ?? []);
+      setExamples(soul.exampleDialogue ?? []);
     } finally {
       setImagining(false);
     }
@@ -119,6 +125,8 @@ export function SoulTab() {
       knowledge,
       contradiction,
       tells,
+      registers: registers.filter((r) => r.when.trim() || r.how.trim()),
+      exampleDialogue: examples.filter((e) => e.user.trim() && e.character.trim()),
       freeform: freehand ? freeform : "",
     };
     const updated = {
@@ -135,9 +143,21 @@ export function SoulTab() {
     setKept(true);
   };
 
+  const setRegisterAt = (i: number, patch: Partial<SpeechRegister>): void => {
+    setRegisters(registers.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  };
+  const setExampleAt = (i: number, patch: Partial<DialogueExchange>): void => {
+    setExamples(examples.map((e, j) => (j === i ? { ...e, ...patch } : e)));
+  };
+
   const soulLength = freehand
     ? freeform.length
-    : [coreIdentity, drives, wounds, voice, relationalStance, knowledge, contradiction, tells, values.join(" ")]
+    : [
+        coreIdentity, drives, wounds, voice, relationalStance, knowledge, contradiction, tells,
+        values.join(" "),
+        registers.map((r) => r.when + r.how).join(" "),
+        examples.map((e) => e.user + e.character).join(" "),
+      ]
         .join(" ")
         .length;
   const approxTokens = Math.round(soulLength / 4);
@@ -216,6 +236,63 @@ export function SoulTab() {
             onChange={(e) => setVoice(e.target.value)}
             placeholder="Rhythm, vocabulary, humor — a sample line or two"
           />
+
+          <label className="dh-field-lab">How their voice shifts</label>
+          <p className="dh-field-hint">No one speaks in a single register. Name the moments, and how the voice changes in them.</p>
+          {registers.map((r, i) => (
+            <div key={i} style={{ marginBottom: "0.75rem" }}>
+              <Input
+                value={r.when}
+                onChange={(e) => setRegisterAt(i, { when: e.target.value })}
+                placeholder="When… (everyday talk / their passion ignites / put on the spot)"
+              />
+              <Textarea
+                value={r.how}
+                rows={2}
+                onChange={(e) => setRegisterAt(i, { how: e.target.value })}
+                placeholder="…the voice becomes"
+              />
+              <div className="dh-tagrow">
+                <Tag interactive onClick={() => setRegisters(registers.filter((_, j) => j !== i))}>
+                  Remove
+                </Tag>
+              </div>
+            </div>
+          ))}
+          <div className="dh-tagrow">
+            <Tag interactive onClick={() => setRegisters([...registers, { when: "", how: "" }])}>
+              Add a register
+            </Tag>
+          </div>
+
+          <label className="dh-field-lab">The voice in practice</label>
+          <p className="dh-field-hint">Short example exchanges — cadence to inhabit, never lines to repeat. One per register works well.</p>
+          {examples.map((ex, i) => (
+            <div key={i} style={{ marginBottom: "0.75rem" }}>
+              <Textarea
+                value={ex.user}
+                rows={1}
+                onChange={(e) => setExampleAt(i, { user: e.target.value })}
+                placeholder="Someone says to them…"
+              />
+              <Textarea
+                value={ex.character}
+                rows={2}
+                onChange={(e) => setExampleAt(i, { character: e.target.value })}
+                placeholder="…and they answer, in their true voice"
+              />
+              <div className="dh-tagrow">
+                <Tag interactive onClick={() => setExamples(examples.filter((_, j) => j !== i))}>
+                  Remove
+                </Tag>
+              </div>
+            </div>
+          ))}
+          <div className="dh-tagrow">
+            <Tag interactive onClick={() => setExamples([...examples, { user: "", character: "" }])}>
+              Add an exchange
+            </Tag>
+          </div>
 
           <label className="dh-field-lab">How they treat people</label>
           <Textarea

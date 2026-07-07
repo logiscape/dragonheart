@@ -6,7 +6,7 @@
    used verbatim when an author wants full control.
    ============================================================ */
 
-import type { Character, SoulDocument } from "./types";
+import type { Character, DialogueExchange, SoulDocument, SpeechRegister } from "./types";
 import { estimateTokens } from "./tokens";
 
 export function blankSoul(): SoulDocument {
@@ -22,6 +22,19 @@ export function blankSoul(): SoulDocument {
  */
 export function normalizeSoul(s: Partial<SoulDocument> | null | undefined): SoulDocument {
   const str = (v: unknown): string => (typeof v === "string" ? v : "");
+  const registers: SpeechRegister[] = Array.isArray(s?.registers)
+    ? s!.registers
+        .map((r) => ({ when: str((r as Partial<SpeechRegister>)?.when), how: str((r as Partial<SpeechRegister>)?.how) }))
+        .filter((r) => r.when.trim() || r.how.trim())
+    : [];
+  const exampleDialogue: DialogueExchange[] = Array.isArray(s?.exampleDialogue)
+    ? s!.exampleDialogue
+        .map((e) => ({
+          user: str((e as Partial<DialogueExchange>)?.user),
+          character: str((e as Partial<DialogueExchange>)?.character),
+        }))
+        .filter((e) => e.user.trim() && e.character.trim())
+    : [];
   return {
     coreIdentity: str(s?.coreIdentity),
     drives: str(s?.drives),
@@ -32,6 +45,8 @@ export function normalizeSoul(s: Partial<SoulDocument> | null | undefined): Soul
     knowledge: str(s?.knowledge),
     contradiction: str(s?.contradiction),
     tells: str(s?.tells),
+    registers,
+    exampleDialogue,
     freeform: str(s?.freeform),
   };
 }
@@ -71,6 +86,12 @@ export function soulToPrompt(char: Character): string {
     lines.push(`\nYour lines — what you will and won't do: ${s.values.join("; ")}.`);
   }
   section("How you actually speak", s.voice);
+  if (s.registers && s.registers.length) {
+    lines.push("\nHow your voice shifts with the moment — no one speaks in a single register:");
+    for (const r of s.registers) {
+      lines.push(`- When ${r.when.trim()}: ${r.how.trim()}`);
+    }
+  }
   section("How you treat people", s.relationalStance);
   section("The world you know", s.knowledge);
   section("A contradiction you carry", s.contradiction);
@@ -80,6 +101,23 @@ export function soulToPrompt(char: Character): string {
     "\nSpeak and act from this identity. You are this person, not an assistant; never break character, never mention being an AI or a model. Let your behavior emerge from who you are.",
   );
   return lines.join("\n");
+}
+
+/**
+ * Render the `<voice_examples>` few-shot block, or null when none authored.
+ * Examples teach cadence far better than description — the model imitates
+ * them instead of interpreting adjectives.
+ */
+export function voiceExamplesToPrompt(char: Character): string | null {
+  const s = normalizeSoul(char.soul);
+  if (!s.exampleDialogue || s.exampleDialogue.length === 0) return null;
+  const blocks = s.exampleDialogue
+    .slice(0, 4)
+    .map((e) => `Them: ${e.user.trim()}\nYou: ${e.character.trim()}`);
+  return [
+    "How you sound in practice — a cadence to inhabit, never lines to repeat:",
+    ...blocks,
+  ].join("\n\n");
 }
 
 export function soulTokenEstimate(char: Character): number {

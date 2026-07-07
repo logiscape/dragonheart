@@ -319,6 +319,7 @@ export class Repos {
       showInnerMonologue: b(r.show_inner_monologue),
       allowTopicChange: b(r.allow_topic_change),
       mood: r.mood ? (String(r.mood) as Relationship["mood"]) : null,
+      affect: r.affect ? String(r.affect) : null,
       createdAt: Number(r.created_at),
       updatedAt: Number(r.updated_at),
     };
@@ -353,17 +354,18 @@ export class Repos {
       showInnerMonologue: false,
       allowTopicChange: true,
       mood: null,
+      affect: null,
       createdAt: now,
       updatedAt: now,
     };
     await this.db.execute(
       `INSERT INTO relationship
        (id, user_id, character_id, profile, persona_id, model_override, memory_depth,
-        proactive_allowed, show_inner_monologue, allow_topic_change, mood, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        proactive_allowed, show_inner_monologue, allow_topic_change, mood, affect, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         r.id, r.userId, r.characterId, r.profile, r.personaId, r.modelOverride, r.memoryDepth,
-        ib(r.proactiveAllowed), ib(r.showInnerMonologue), ib(r.allowTopicChange), r.mood,
+        ib(r.proactiveAllowed), ib(r.showInnerMonologue), ib(r.allowTopicChange), r.mood, r.affect,
         r.createdAt, r.updatedAt,
       ],
     );
@@ -373,12 +375,24 @@ export class Repos {
   async updateRelationship(r: Relationship): Promise<void> {
     await this.db.execute(
       `UPDATE relationship SET profile=?, persona_id=?, model_override=?, memory_depth=?,
-        proactive_allowed=?, show_inner_monologue=?, allow_topic_change=?, mood=?, updated_at=? WHERE id=?`,
+        proactive_allowed=?, show_inner_monologue=?, allow_topic_change=?, mood=?, affect=?, updated_at=? WHERE id=?`,
       [
         r.profile, r.personaId, r.modelOverride, r.memoryDepth, ib(r.proactiveAllowed),
-        ib(r.showInnerMonologue), ib(r.allowTopicChange), r.mood, this.clock.now(), r.id,
+        ib(r.showInnerMonologue), ib(r.allowTopicChange), r.mood, r.affect, this.clock.now(), r.id,
       ],
     );
+  }
+
+  /** When the user and this character last exchanged a message, across all conversations. */
+  async latestMessageTime(relationshipId: string): Promise<number | null> {
+    const rows = await this.db.select<Row>(
+      `SELECT m.created_at AS created_at
+         FROM message m JOIN conversation c ON m.conversation_id = c.id
+        WHERE c.relationship_id = ?
+        ORDER BY m.created_at DESC LIMIT 1`,
+      [relationshipId],
+    );
+    return rows[0] ? Number(rows[0].created_at) : null;
   }
 
   private async deleteRelationshipCascade(relationshipId: string): Promise<void> {

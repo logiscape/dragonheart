@@ -74,6 +74,7 @@ export function makeRelationship(over: Partial<Relationship> = {}): Relationship
     showInnerMonologue: false,
     allowTopicChange: true,
     mood: "heart",
+    affect: null,
     createdAt: 1000,
     updatedAt: 1000,
     ...over,

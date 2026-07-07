@@ -38,6 +38,7 @@ export function Sidebar() {
               onClick={() => void store.openCharacter(c.id)}
             >
               <Avatar
+                src={c.avatarPath}
                 name={c.name}
                 size="sm"
                 status={c.status}

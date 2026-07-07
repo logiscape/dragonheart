@@ -7,9 +7,12 @@
    and pre-empts the "flat by message 30" failure.
 
      1 Soul Document      (per character, always)
+       + voice examples   (few-shot cadence, when authored)
      2 Global user/persona(per user, always)
-     3 Relationship       (per user × character)
-     4 Triggered lore + recalled memory (keyword/embedding-activated)
+     3 Relationship       (per user × character: profile, time since
+                           last spoke, carried affect, mood tint)
+     4 Triggered lore + recalled memory (keyword/embedding-activated;
+                           tender recall re-surfaces the character's tells)
      5 Scene / scenario   (per conversation, optional)
      6 Conversation history (recent verbatim within budget)
      7 Control tokens     (Gemma 4 <|think|>)
@@ -29,7 +32,7 @@ import type {
   Persona,
   Relationship,
 } from "./types";
-import { soulToPrompt } from "./soul";
+import { normalizeSoul, soulToPrompt, voiceExamplesToPrompt } from "./soul";
 import { estimateTokens, estimateMessageTokens } from "./tokens";
 
 export interface AssembleInput {
@@ -47,6 +50,10 @@ export interface AssembleInput {
   newUser: { content: string; attachments?: Attachment[] } | null;
   triggeredLore: LoreEntry[];
   recalledMemories: Memory[];
+  /** current time — enables "it's been three days" awareness when provided */
+  now?: number;
+  /** when the two of them last exchanged a message; null/absent → no gap line */
+  lastInteractionAt?: number | null;
 }
 
 const MOOD_HINT: Record<string, string> = {
@@ -60,6 +67,33 @@ function section(tag: string, body: string): string {
   return `<${tag}>\n${body.trim()}\n</${tag}>`;
 }
 
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
+/**
+ * Describe how long it's been since they last spoke, or null when the gap is
+ * too small to matter (a character who announces "it's been ten minutes"
+ * feels less human, not more).
+ */
+export function describeTimeGap(now: number, lastInteractionAt: number): string | null {
+  const gap = now - lastInteractionAt;
+  if (gap < 4 * HOUR_MS) return null;
+  if (gap < 2 * DAY_MS) {
+    const hours = Math.round(gap / HOUR_MS);
+    return `about ${hours} hours`;
+  }
+  if (gap < 14 * DAY_MS) {
+    const days = Math.round(gap / DAY_MS);
+    return `about ${days} days`;
+  }
+  if (gap < 60 * DAY_MS) {
+    const weeks = Math.round(gap / (7 * DAY_MS));
+    return weeks <= 1 ? "about a week" : `about ${weeks} weeks`;
+  }
+  const months = Math.round(gap / (30 * DAY_MS));
+  return months <= 1 ? "about a month" : `about ${months} months`;
+}
+
 function buildSystem(input: AssembleInput): string {
   const { character, persona, userName, relationship, conversation, triggeredLore, recalledMemories } =
     input;
@@ -71,6 +105,10 @@ function buildSystem(input: AssembleInput): string {
   // Layer 1 — Soul
   blocks.push(section("soul", soulToPrompt(character)));
 
+  // Layer 1b — the voice in practice (few-shot cadence, not script)
+  const voiceExamples = voiceExamplesToPrompt(character);
+  if (voiceExamples) blocks.push(section("voice_examples", voiceExamples));
+
   // Layer 2 — Global user / persona
   const aboutLines: string[] = [];
   aboutLines.push(`The person you're with goes by "${userName || "they"}".`);
@@ -80,6 +118,19 @@ function buildSystem(input: AssembleInput): string {
   // Layer 3 — Relationship
   const relLines: string[] = [];
   if (relationship.profile.trim()) relLines.push(relationship.profile.trim());
+  if (input.now != null && input.lastInteractionAt != null) {
+    const gap = describeTimeGap(input.now, input.lastInteractionAt);
+    if (gap) {
+      relLines.push(
+        `It's been ${gap} since the two of you last spoke. Let that passage of time be real to you — don't announce it mechanically.`,
+      );
+    }
+  }
+  if (relationship.affect && relationship.affect.trim()) {
+    relLines.push(
+      `How the last conversation left you feeling (private — carry it, don't recite it): ${relationship.affect.trim()}`,
+    );
+  }
   if (relationship.mood && MOOD_HINT[relationship.mood]) relLines.push(MOOD_HINT[relationship.mood]!);
   if (relLines.length) blocks.push(section("relationship", relLines.join("\n")));
 
@@ -90,13 +141,19 @@ function buildSystem(input: AssembleInput): string {
     if (l.content.trim()) remembered.push(l.content.trim());
   }
   if (remembered.length) {
-    blocks.push(
-      section(
-        "remembered",
-        "What you carry that's relevant right now (let it surface naturally, don't recite it):\n" +
-          remembered.join("\n"),
-      ),
-    );
+    const rememberedLines = [
+      "What you carry that's relevant right now (let it surface naturally, don't recite it):",
+      remembered.join("\n"),
+    ];
+    // A tender memory near the surface should show in behavior, not narration.
+    const tenderNearby = recalledMemories.some((m) => m.kind === "tender");
+    const tells = normalizeSoul(character.soul).tells.trim();
+    if (tenderNearby && tells) {
+      rememberedLines.push(
+        `Something tender is close to the surface right now. Don't name it unless they do — let it show through your tells: ${tells}`,
+      );
+    }
+    blocks.push(section("remembered", rememberedLines.join("\n")));
   }
 
   // Layer 5 — Scene

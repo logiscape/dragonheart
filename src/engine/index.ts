@@ -49,7 +49,7 @@ import type {
   SoulDocument,
   User,
 } from "./types";
-import { starterCharacters } from "./seed";
+import { starterCharacters, starterLore } from "./seed";
 
 export * from "./types";
 export { DEFAULT_PROBES } from "./personaProbe";
@@ -168,11 +168,14 @@ export class Engine {
   }
 
   /** Seed the starter circle on first run so the Hall has presence. */
-  async seedStartersIfEmpty(): Promise<void> {
+  async seedStartersIfEmpty(avatars: Record<string, string> = {}): Promise<void> {
     const existing = await this.repos.listCharacters();
     if (existing.length > 0) return;
-    for (const c of starterCharacters(this.settings.defaultModel, this.settings.fastModel)) {
-      await this.repos.createCharacter(c);
+    for (const c of starterCharacters(this.settings.defaultModel, this.settings.fastModel, avatars)) {
+      const created = await this.repos.createCharacter(c);
+      for (const l of starterLore(created.name, created.id)) {
+        await this.repos.createLore(l);
+      }
     }
   }
 
@@ -211,7 +214,10 @@ export class Engine {
     const sys = `You are a character designer. From a brief sketch, write a Soul Document describing WHO a character is (drives, wounds, values, voice) — not what tasks they do. Behavior should emerge from identity.
 
 Return ONLY JSON with this shape:
-{"coreIdentity":"","drives":"","wounds":"","values":["",""],"voice":"","relationalStance":"","knowledge":"","contradiction":"","tells":""}`;
+{"coreIdentity":"","drives":"","wounds":"","values":["",""],"voice":"","relationalStance":"","knowledge":"","contradiction":"","tells":"","registers":[{"when":"<situation>","how":"<how the voice changes>"}],"exampleDialogue":[{"user":"<something said to them>","character":"<their reply, in their true voice>"}]}
+
+registers: 2-3 entries — how the voice shifts between situations (no one speaks in a single register).
+exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a different register.`;
     const res = await this.ollama.chat({
       model: this.settings.fastModel || this.settings.defaultModel,
       messages: [
@@ -318,6 +324,9 @@ Return ONLY JSON with this shape:
     const recalled = await this.recall(relationship.id, recentText, queryEmbedding);
     const lore = await this.triggeredLore(character.id, relationship.id, recentText, queryEmbedding);
 
+    // time awareness: when they last exchanged a message, before this turn
+    const lastInteractionAt = await this.repos.latestMessageTime(relationship.id);
+
     const model = resolveModel(relationship, character, this.settings.defaultModel);
     const assembled = assembleContext({
       numCtx: this.settings.numCtx,
@@ -332,6 +341,8 @@ Return ONLY JSON with this shape:
       newUser: { content, attachments },
       triggeredLore: lore,
       recalledMemories: recalled,
+      now: this.clock.now(),
+      lastInteractionAt,
     });
 
     const userMsg = await this.repos.addMessage({
@@ -360,6 +371,11 @@ Return ONLY JSON with this shape:
 
     // long-term memory rollup runs in the background; never blocks the reply
     void this.maybeRollup(conversationId).catch((e) => console.error("rollup failed:", e));
+
+    // carried feeling: note privately how the exchange landed, for next turn
+    void this.updateAffect(relationship.id, character, content, replyText).catch((e) =>
+      console.error("affect update failed:", e),
+    );
 
     return {
       user: userMsg,
@@ -401,6 +417,40 @@ Return ONLY JSON with this shape:
       maxEntries: 8,
     });
     return hits.map((h) => h.entry);
+  }
+
+  /**
+   * Carried emotional state: after a reply, ask the fast model for a one-line,
+   * first-person note of how the exchange left the character feeling about the
+   * user. Injected into Layer 3 next turn, so feeling persists across turns
+   * and sessions. Background only — never blocks the reply.
+   */
+  private async updateAffect(
+    relationshipId: string,
+    character: Character,
+    userText: string,
+    replyText: string,
+  ): Promise<void> {
+    const model = this.settings.fastModel || this.settings.defaultModel;
+    const sys = `You are the private inner voice of ${character.name}. Given the latest exchange, write ONE sentence (under 25 words), first person, noting how it left you feeling about ${this.user.displayName} and anything you're carrying into next time. Be honest — warmth, hurt, worry, delight, all allowed. Return ONLY the sentence.`;
+    const result = await this.ollama.chat({
+      model,
+      messages: [
+        { role: "system", content: sys },
+        {
+          role: "user",
+          content: `${this.user.displayName}: ${userText}\n${character.name}: ${replyText}`,
+        },
+      ],
+      options: { num_ctx: 4096, temperature: 0.4 },
+      stream: false,
+    });
+    const affect = result.content.trim().replace(/^["'\s]+|["'\s]+$/g, "").slice(0, 300);
+    if (!affect) return;
+    // re-read: the relationship may have been edited while the model thought
+    const rel = await this.repos.getRelationshipById(relationshipId);
+    if (!rel) return;
+    await this.repos.updateRelationship({ ...rel, affect });
   }
 
   private async maybeRollup(conversationId: string): Promise<void> {

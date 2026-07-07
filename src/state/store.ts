@@ -8,6 +8,11 @@
    ============================================================ */
 
 import React, { useContext, useSyncExternalStore } from "react";
+import elaraAvatar from "@assets/elara.jpg?inline";
+import jaxAvatar from "@assets/jax.jpg?inline";
+import silasAvatar from "@assets/silas.jpg?inline";
+import miraAvatar from "@assets/mira.jpg?inline";
+import leoAvatar from "@assets/leo.jpg?inline";
 import type { TauriOllama } from "@adapters/tauriOllama";
 import { Engine } from "@engine/index";
 import type {
@@ -22,6 +27,15 @@ import type {
 } from "@engine/index";
 
 export type View = "welcome" | "hall" | "conversation" | "create";
+
+/** Portraits for seeded starters, inlined as data URLs so they survive rebuilds. */
+const STARTER_AVATARS: Record<string, string> = {
+  "Elara Vance": elaraAvatar,
+  "Jax Sterling": jaxAvatar,
+  "Silas Thorne": silasAvatar,
+  "Mira Chen": miraAvatar,
+  "Leo Aris": leoAvatar,
+};
 
 export interface AppState {
   ready: boolean;
@@ -113,7 +127,7 @@ export class AppStore {
 
     let characters: Character[] = [];
     if (onboarded) {
-      await this.engine.seedStartersIfEmpty();
+      await this.engine.seedStartersIfEmpty(STARTER_AVATARS);
       characters = await this.engine.listCharacters();
     }
 
@@ -146,7 +160,7 @@ export class AppStore {
   async crossThreshold(name: string): Promise<void> {
     await this.engine.setUserName(name || "traveller");
     await this.engine.markOnboarded();
-    await this.engine.seedStartersIfEmpty();
+    await this.engine.seedStartersIfEmpty(STARTER_AVATARS);
     const characters = await this.engine.listCharacters();
     this.set({ user: this.engine.getUser(), characters, view: "hall" });
   }

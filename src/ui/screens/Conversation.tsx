@@ -79,7 +79,7 @@ export function Conversation() {
         from="character"
         name={character.name}
         dropcap={isGreeting && character.greetingDropcap}
-        avatar={<Avatar name={character.name} size="sm" mood={character.mood} ring breathing />}
+        avatar={<Avatar src={character.avatarPath} name={character.name} size="sm" mood={character.mood} ring breathing />}
       >
         {m.content}
       </MessageBubble>
@@ -92,7 +92,7 @@ export function Conversation() {
     <main className="dh-conv">
       <header className="dh-conv__bar">
         <div className="dh-conv__who">
-          <Avatar name={character.name} size="md" mood={character.mood} ring breathing status="present" />
+          <Avatar src={character.avatarPath} name={character.name} size="md" mood={character.mood} ring breathing status="present" />
           <div>
             <h1 className="dh-conv__name">{character.name}</h1>
             <PresenceIndicator
@@ -126,7 +126,7 @@ export function Conversation() {
             <MessageBubble
               from="character"
               name={character.name}
-              avatar={<Avatar name={character.name} size="sm" mood={character.mood} ring breathing />}
+              avatar={<Avatar src={character.avatarPath} name={character.name} size="sm" mood={character.mood} ring breathing />}
             >
               {s.streamingText}
             </MessageBubble>

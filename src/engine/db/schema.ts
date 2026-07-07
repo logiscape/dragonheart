@@ -9,7 +9,7 @@
 
 import type { Db } from "../ports";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS meta (
@@ -66,6 +66,7 @@ const STATEMENTS: string[] = [
      show_inner_monologue INTEGER NOT NULL DEFAULT 0,
      allow_topic_change  INTEGER NOT NULL DEFAULT 1,
      mood                TEXT,
+     affect              TEXT,                     -- carried feeling, model-written
      created_at          INTEGER NOT NULL,
      updated_at          INTEGER NOT NULL,
      UNIQUE (user_id, character_id)
@@ -146,6 +147,20 @@ export async function initSchema(db: Db): Promise<void> {
       "schema_version",
       String(SCHEMA_VERSION),
     ]);
+    return;
   }
-  // (future: read rows[0].value and run forward migrations)
+
+  // forward migrations, keyed on the stored version
+  let version = Number(rows[0]!.value) || 1;
+  if (version < 2) {
+    // v2: carried emotional state on the relationship
+    await db.execute(`ALTER TABLE relationship ADD COLUMN affect TEXT`);
+    version = 2;
+  }
+  if (version !== Number(rows[0]!.value)) {
+    await db.execute(`UPDATE meta SET value = ? WHERE key = ?`, [
+      String(version),
+      "schema_version",
+    ]);
+  }
 }

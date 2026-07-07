@@ -18,6 +18,7 @@ export function BondTab() {
   const conversation = s.conversation;
 
   const [profile, setProfile] = useState("");
+  const [affect, setAffect] = useState("");
   const [scene, setScene] = useState("");
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [savedProfile, setSavedProfile] = useState(false);
@@ -38,6 +39,10 @@ export function BondTab() {
     setProfile(relationship?.profile ?? "");
     setSavedProfile(false);
   }, [relationship?.id]);
+
+  useEffect(() => {
+    setAffect(relationship?.affect ?? "");
+  }, [relationship?.id, relationship?.affect]);
 
   useEffect(() => {
     setScene(conversation?.sceneState ?? "");
@@ -72,6 +77,12 @@ export function BondTab() {
     if (!relationship) return;
     const mood = (value || null) as Mood | null;
     await store.engine.updateRelationship({ ...relationship, mood });
+    await store.refreshRelationship();
+  }
+
+  async function keepAffect() {
+    if (!relationship) return;
+    await store.engine.updateRelationship({ ...relationship, affect: affect.trim() || null });
     await store.refreshRelationship();
   }
 
@@ -126,6 +137,20 @@ export function BondTab() {
         onChange={(e) => void pickPersona(e.target.value)}
       />
       <p className="dh-field-hint">The persona you bring into this bond — or your default self.</p>
+
+      <Textarea
+        label="What she's carrying from last time"
+        value={affect}
+        rows={2}
+        placeholder="She writes this herself after each exchange — how it left her feeling. You can soften it, sharpen it, or clear it."
+        onChange={(e) => setAffect(e.target.value)}
+      />
+      <div className="dh-studio__foot" style={{ padding: 0, border: "none" }}>
+        <span />
+        <Button variant="primary" size="sm" onClick={() => void keepAffect()}>
+          Keep
+        </Button>
+      </div>
 
       <Select
         label="The weather between you"
