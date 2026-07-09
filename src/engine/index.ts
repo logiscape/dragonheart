@@ -372,8 +372,10 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     // long-term memory rollup runs in the background; never blocks the reply
     void this.maybeRollup(conversationId).catch((e) => console.error("rollup failed:", e));
 
-    // carried feeling: note privately how the exchange landed, for next turn
-    void this.updateAffect(relationship.id, character, content, replyText).catch((e) =>
+    // carried feeling: note privately how the exchange landed, for next turn.
+    // Runs on the same model that generated the reply so it never forces Ollama
+    // to unload/reload a second model between turns.
+    void this.updateAffect(relationship.id, character, content, replyText, model).catch((e) =>
       console.error("affect update failed:", e),
     );
 
@@ -420,18 +422,19 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
   }
 
   /**
-   * Carried emotional state: after a reply, ask the fast model for a one-line,
+   * Carried emotional state: after a reply, ask the model for a one-line,
    * first-person note of how the exchange left the character feeling about the
    * user. Injected into Layer 3 next turn, so feeling persists across turns
-   * and sessions. Background only — never blocks the reply.
+   * and sessions. Background only — never blocks the reply. Runs on the same
+   * model that generated the reply (passed in) to avoid an Ollama model swap.
    */
   private async updateAffect(
     relationshipId: string,
     character: Character,
     userText: string,
     replyText: string,
+    model: string,
   ): Promise<void> {
-    const model = this.settings.fastModel || this.settings.defaultModel;
     const sys = `You are the private inner voice of ${character.name}. Given the latest exchange, write ONE sentence (under 25 words), first person, noting how it left you feeling about ${this.user.displayName} and anything you're carrying into next time. Be honest — warmth, hurt, worry, delight, all allowed. Return ONLY the sentence.`;
     const result = await this.ollama.chat({
       model,
@@ -442,7 +445,9 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
           content: `${this.user.displayName}: ${userText}\n${character.name}: ${replyText}`,
         },
       ],
-      options: { num_ctx: 4096, temperature: 0.4 },
+      // match the reply's context size so Ollama reuses the loaded runner
+      // rather than reloading the model for a smaller window
+      options: { num_ctx: this.settings.numCtx, temperature: 0.4 },
       stream: false,
     });
     const affect = result.content.trim().replace(/^["'\s]+|["'\s]+$/g, "").slice(0, 300);
