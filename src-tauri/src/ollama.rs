@@ -7,7 +7,17 @@
 //! us reliable streaming.
 
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
+
+/// Cancellation flags for in-flight chat streams, keyed by the frontend's
+/// `stream_id`. Set by `ollama_chat_cancel`; checked per chunk in
+/// `ollama_chat_stream` (dropping the response aborts the HTTP request, which
+/// makes Ollama halt generation on client disconnect).
+#[derive(Default)]
+pub struct StreamRegistry(pub Mutex<HashMap<String, Arc<AtomicBool>>>);
 
 fn client() -> reqwest::Client {
     reqwest::Client::new()
@@ -58,12 +68,24 @@ pub async fn ollama_post(base_url: String, path: String, body: Value) -> Result<
 pub async fn ollama_chat_stream(
     base_url: String,
     mut body: Value,
+    stream_id: Option<String>,
     on_event: Channel<Value>,
+    registry: tauri::State<'_, StreamRegistry>,
 ) -> Result<(), String> {
     let url = join(&base_url, "/api/chat");
     if let Value::Object(ref mut map) = body {
         map.insert("stream".into(), Value::Bool(true));
     }
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Some(ref id) = stream_id {
+        registry.0.lock().unwrap().insert(id.clone(), cancel.clone());
+    }
+    // remove the registry entry on every exit path
+    let _guard = RegistryGuard {
+        registry: &registry,
+        stream_id: stream_id.as_deref(),
+    };
 
     let resp = client()
         .post(&url)
@@ -84,6 +106,11 @@ pub async fn ollama_chat_stream(
         .await
         .map_err(|e| format!("Stream interrupted: {e}"))?
     {
+        if cancel.load(Ordering::Relaxed) {
+            // dropping `resp` closes the connection; Ollama stops generating
+            let _ = on_event.send(serde_json::json!({ "done": true, "done_reason": "cancel" }));
+            return Ok(());
+        }
         buf.extend_from_slice(&chunk);
         while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = buf.drain(..=pos).collect();
@@ -94,6 +121,32 @@ pub async fn ollama_chat_stream(
         emit_line(&buf, &on_event);
     }
     Ok(())
+}
+
+/// Flag a running stream for cancellation. Idempotent — unknown ids are fine
+/// (the stream may have already finished and cleaned up).
+#[tauri::command]
+pub async fn ollama_chat_cancel(
+    stream_id: String,
+    registry: tauri::State<'_, StreamRegistry>,
+) -> Result<(), String> {
+    if let Some(flag) = registry.0.lock().unwrap().get(&stream_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+struct RegistryGuard<'a> {
+    registry: &'a tauri::State<'a, StreamRegistry>,
+    stream_id: Option<&'a str>,
+}
+
+impl Drop for RegistryGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = self.stream_id {
+            self.registry.0.lock().unwrap().remove(id);
+        }
+    }
 }
 
 fn emit_line(line: &[u8], on_event: &Channel<Value>) {

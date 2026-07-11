@@ -4,24 +4,12 @@
    streamed reply → persistence → embeddings → rollup summarization. */
 import { describe, it, expect, beforeAll } from "vitest";
 import { Engine } from "../index";
-import type { Db, DbResult, OllamaTransport } from "../ports";
+import type { OllamaTransport } from "../ports";
 import type { OllamaChatRequest, OllamaChatChunk } from "../types";
 import { makeMessage } from "./fixtures";
+import { NodeDb } from "./nodeDb";
 
 const LIVE = process.env.DH_LIVE === "1";
-
-// ---- node:sqlite Db adapter (in-memory) ----
-class NodeDb implements Db {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  constructor(private readonly db: any) {}
-  async execute(sql: string, params: unknown[] = []): Promise<DbResult> {
-    const r = this.db.prepare(sql).run(...params);
-    return { rowsAffected: Number(r.changes), lastInsertId: Number(r.lastInsertRowid) };
-  }
-  async select<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> {
-    return this.db.prepare(sql).all(...params) as T[];
-  }
-}
 
 // ---- fetch-based Ollama transport (NDJSON streaming) ----
 class FetchOllama implements OllamaTransport {
@@ -75,10 +63,8 @@ describe.skipIf(!LIVE)("live engine ↔ ollama", () => {
 
   beforeAll(async () => {
     // runtime require so Vite doesn't try to pre-resolve the very-new builtin
-    const { createRequire } = await import("node:module");
-    const req = createRequire(import.meta.url);
-    const { DatabaseSync } = req("node:sqlite") as { DatabaseSync: new (p: string) => unknown };
-    engine = await Engine.create(new NodeDb(new DatabaseSync(":memory:")), new FetchOllama());
+    const { tryCreateNodeDb } = await import("./nodeDb");
+    engine = await Engine.create(tryCreateNodeDb()!, new FetchOllama());
     await engine.updateSettings({
       defaultModel: "gemma4:e4b",
       fastModel: "gemma4:e4b",

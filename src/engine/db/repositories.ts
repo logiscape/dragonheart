@@ -20,6 +20,7 @@ import type {
   Persona,
   Relationship,
   Role,
+  RoomParticipant,
   SoulDocument,
   User,
 } from "../types";
@@ -29,12 +30,26 @@ const b = (v: unknown): boolean => Number(v) === 1;
 const ib = (v: boolean): number => (v ? 1 : 0);
 const j = (v: unknown): string => JSON.stringify(v ?? null);
 
+/* relationship_id is NOT NULL in SQLite (relaxing it would need a table
+   rebuild, and the Db port has no transactions), so rooms and room-scoped
+   memories store the empty string. The sentinel exists ONLY in this file:
+   '' ↔ null at the row boundary, and '' never collides with a real UUID.
+   Any raw query joining on relationship_id must exclude ''. */
+const REL_NONE = "";
+const relToRow = (id: string | null): string => id ?? REL_NONE;
+const relFromRow = (v: unknown): string | null => (v ? String(v) : null);
+
 type Row = Record<string, unknown>;
 
 export type CharacterInput = Omit<Character, "id" | "createdAt" | "updatedAt">;
 export type LoreInput = Omit<LoreEntry, "id" | "createdAt" | "updatedAt">;
-export type MemoryInput = Omit<Memory, "id" | "createdAt" | "updatedAt" | "lastRecalledAt">;
-export type MessageInput = Omit<Message, "id" | "createdAt">;
+export type MemoryInput = Omit<
+  Memory,
+  "id" | "createdAt" | "updatedAt" | "lastRecalledAt" | "roomId"
+> & { roomId?: string | null };
+export type MessageInput = Omit<Message, "id" | "createdAt" | "speakerCharacterId"> & {
+  speakerCharacterId?: string | null;
+};
 
 export class Repos {
   constructor(
@@ -240,6 +255,11 @@ export class Repos {
     const rels = await this.db.select<Row>(`SELECT id FROM relationship WHERE character_id = ?`, [id]);
     for (const r of rels) await this.deleteRelationshipCascade(String(r.id));
     await this.db.execute(`DELETE FROM lore WHERE scope = 'character' AND owner_id = ?`, [id]);
+    // soft-leave any rooms; their labeled messages stay in the timeline
+    await this.db.execute(
+      `UPDATE conversation_participant SET left_at = ? WHERE character_id = ? AND left_at IS NULL`,
+      [this.clock.now(), id],
+    );
     await this.db.execute(`DELETE FROM character WHERE id = ?`, [id]);
   }
 
@@ -415,7 +435,8 @@ export class Repos {
   private rowToConversation(r: Row): Conversation {
     return {
       id: String(r.id),
-      relationshipId: String(r.relationship_id),
+      relationshipId: relFromRow(r.relationship_id),
+      kind: r.kind === "room" ? "room" : "direct",
       title: r.title ? String(r.title) : null,
       sceneState: r.scene_state ? String(r.scene_state) : null,
       startedAt: Number(r.started_at),
@@ -452,6 +473,7 @@ export class Repos {
     const c: Conversation = {
       id: newId(),
       relationshipId,
+      kind: "direct",
       title: null,
       sceneState,
       startedAt: now,
@@ -459,11 +481,105 @@ export class Repos {
       lastSummaryThroughMessageId: null,
     };
     await this.db.execute(
-      `INSERT INTO conversation (id, relationship_id, title, scene_state, started_at, updated_at, last_summary_through_message_id)
-       VALUES (?,?,?,?,?,?,?)`,
-      [c.id, c.relationshipId, c.title, c.sceneState, c.startedAt, c.updatedAt, c.lastSummaryThroughMessageId],
+      `INSERT INTO conversation (id, relationship_id, kind, title, scene_state, started_at, updated_at, last_summary_through_message_id)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [c.id, c.relationshipId, c.kind, c.title, c.sceneState, c.startedAt, c.updatedAt, c.lastSummaryThroughMessageId],
     );
     return c;
+  }
+
+  // ---------------- rooms ----------------
+
+  async createRoomConversation(name: string, sceneState: string | null = null): Promise<Conversation> {
+    const now = this.clock.now();
+    const c: Conversation = {
+      id: newId(),
+      relationshipId: null,
+      kind: "room",
+      title: name,
+      sceneState,
+      startedAt: now,
+      updatedAt: now,
+      lastSummaryThroughMessageId: null,
+    };
+    await this.db.execute(
+      `INSERT INTO conversation (id, relationship_id, kind, title, scene_state, started_at, updated_at, last_summary_through_message_id)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [c.id, relToRow(c.relationshipId), c.kind, c.title, c.sceneState, c.startedAt, c.updatedAt, c.lastSummaryThroughMessageId],
+    );
+    return c;
+  }
+
+  async listRoomConversations(): Promise<Conversation[]> {
+    const rows = await this.db.select<Row>(
+      `SELECT * FROM conversation WHERE kind = 'room' ORDER BY updated_at DESC`,
+    );
+    return rows.map((r) => this.rowToConversation(r));
+  }
+
+  private rowToParticipant(r: Row): RoomParticipant {
+    return {
+      conversationId: String(r.conversation_id),
+      characterId: String(r.character_id),
+      joinedAt: Number(r.joined_at),
+      leftAt: r.left_at != null ? Number(r.left_at) : null,
+      talkativeness: Number(r.talkativeness ?? 0.5),
+    };
+  }
+
+  /** Add (or re-admit) a character to a room. Re-joining clears `left_at`. */
+  async addParticipant(conversationId: string, characterId: string): Promise<RoomParticipant> {
+    const now = this.clock.now();
+    await this.db.execute(
+      `INSERT INTO conversation_participant (conversation_id, character_id, joined_at, left_at, talkativeness)
+       VALUES (?,?,?,NULL,0.5)
+       ON CONFLICT(conversation_id, character_id) DO UPDATE SET left_at = NULL`,
+      [conversationId, characterId, now],
+    );
+    const rows = await this.db.select<Row>(
+      `SELECT * FROM conversation_participant WHERE conversation_id = ? AND character_id = ?`,
+      [conversationId, characterId],
+    );
+    return this.rowToParticipant(rows[0]!);
+  }
+
+  /** Soft leave — their labeled messages stay in the room. */
+  async removeParticipant(conversationId: string, characterId: string): Promise<void> {
+    await this.db.execute(
+      `UPDATE conversation_participant SET left_at = ? WHERE conversation_id = ? AND character_id = ?`,
+      [this.clock.now(), conversationId, characterId],
+    );
+  }
+
+  async listParticipants(conversationId: string, includeLeft = false): Promise<RoomParticipant[]> {
+    const rows = await this.db.select<Row>(
+      includeLeft
+        ? `SELECT * FROM conversation_participant WHERE conversation_id = ? ORDER BY joined_at ASC`
+        : `SELECT * FROM conversation_participant WHERE conversation_id = ? AND left_at IS NULL ORDER BY joined_at ASC`,
+      [conversationId],
+    );
+    return rows.map((r) => this.rowToParticipant(r));
+  }
+
+  async setParticipantTalkativeness(
+    conversationId: string,
+    characterId: string,
+    talkativeness: number,
+  ): Promise<void> {
+    await this.db.execute(
+      `UPDATE conversation_participant SET talkativeness = ? WHERE conversation_id = ? AND character_id = ?`,
+      [talkativeness, conversationId, characterId],
+    );
+  }
+
+  /** The room's own continuity summary (shared by all participants). */
+  async latestRoomSummary(conversationId: string): Promise<Memory | null> {
+    const rows = await this.db.select<Row>(
+      `SELECT * FROM memory WHERE room_id = ? AND relationship_id = ? AND kind = 'summary' AND enabled = 1
+       ORDER BY created_at DESC LIMIT 1`,
+      [conversationId, REL_NONE],
+    );
+    return rows[0] ? this.rowToMemory(rows[0]) : null;
   }
 
   async updateConversation(c: Conversation): Promise<void> {
@@ -479,6 +595,13 @@ export class Repos {
 
   async deleteConversation(id: string): Promise<void> {
     await this.db.execute(`DELETE FROM message WHERE conversation_id = ?`, [id]);
+    await this.db.execute(`DELETE FROM conversation_participant WHERE conversation_id = ?`, [id]);
+    // room-scoped continuity summaries die with the room; per-character
+    // memories born there (relationship_id set) live on in each bond
+    await this.db.execute(`DELETE FROM memory WHERE room_id = ? AND relationship_id = ?`, [
+      id,
+      REL_NONE,
+    ]);
     await this.db.execute(`DELETE FROM conversation WHERE id = ?`, [id]);
   }
 
@@ -491,6 +614,7 @@ export class Repos {
       role: String(r.role) as Role,
       content: String(r.content ?? ""),
       attachments: safeJsonParse<Attachment[]>(r.attachments, []),
+      speakerCharacterId: r.speaker_character_id ? String(r.speaker_character_id) : null,
       tokens: Number(r.tokens ?? 0),
       createdAt: Number(r.created_at),
       summarized: b(r.summarized),
@@ -514,11 +638,16 @@ export class Repos {
   }
 
   async addMessage(input: MessageInput): Promise<Message> {
-    const m: Message = { ...input, id: newId(), createdAt: this.clock.now() };
+    const m: Message = {
+      ...input,
+      speakerCharacterId: input.speakerCharacterId ?? null,
+      id: newId(),
+      createdAt: this.clock.now(),
+    };
     await this.db.execute(
-      `INSERT INTO message (id, conversation_id, role, content, attachments, tokens, created_at, summarized)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [m.id, m.conversationId, m.role, m.content, j(m.attachments), m.tokens, m.createdAt, ib(m.summarized)],
+      `INSERT INTO message (id, conversation_id, role, content, attachments, speaker_character_id, tokens, created_at, summarized)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [m.id, m.conversationId, m.role, m.content, j(m.attachments), m.speakerCharacterId, m.tokens, m.createdAt, ib(m.summarized)],
     );
     await this.touchConversation(m.conversationId);
     return m;
@@ -539,7 +668,8 @@ export class Repos {
   private rowToMemory(r: Row): Memory {
     return {
       id: String(r.id),
-      relationshipId: String(r.relationship_id),
+      relationshipId: relFromRow(r.relationship_id),
+      roomId: r.room_id ? String(r.room_id) : null,
       content: String(r.content ?? ""),
       kind: String(r.kind ?? "fact") as Memory["kind"],
       keys: safeJsonParse<string[]>(r.keys, []),
@@ -580,13 +710,20 @@ export class Repos {
 
   async createMemory(input: MemoryInput): Promise<Memory> {
     const now = this.clock.now();
-    const m: Memory = { ...input, id: newId(), createdAt: now, updatedAt: now, lastRecalledAt: null };
+    const m: Memory = {
+      ...input,
+      roomId: input.roomId ?? null,
+      id: newId(),
+      createdAt: now,
+      updatedAt: now,
+      lastRecalledAt: null,
+    };
     await this.db.execute(
       `INSERT INTO memory
-       (id, relationship_id, content, kind, keys, embedding, salience, source_message_ids, pinned, enabled, created_at, updated_at, last_recalled_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       (id, relationship_id, room_id, content, kind, keys, embedding, salience, source_message_ids, pinned, enabled, created_at, updated_at, last_recalled_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        m.id, m.relationshipId, m.content, m.kind, j(m.keys), m.embedding ? j(m.embedding) : null,
+        m.id, relToRow(m.relationshipId), m.roomId, m.content, m.kind, j(m.keys), m.embedding ? j(m.embedding) : null,
         m.salience, j(m.sourceMessageIds), ib(m.pinned), ib(m.enabled), m.createdAt, m.updatedAt, m.lastRecalledAt,
       ],
     );

@@ -5,7 +5,7 @@
    stream) while forwarding deltas for the live typing effect.
    ============================================================ */
 
-import type { OllamaTransport } from "./ports";
+import type { ChatStreamOptions, OllamaTransport } from "./ports";
 import type { OllamaChatRequest, OllamaChatChunk, OllamaModelInfo } from "./types";
 
 export interface ChatResult {
@@ -21,14 +21,18 @@ export type TokenHandler = (delta: string, full: string) => void;
 export class OllamaClient {
   constructor(private readonly transport: OllamaTransport) {}
 
-  async chat(req: OllamaChatRequest, onToken?: TokenHandler): Promise<ChatResult> {
+  async chat(
+    req: OllamaChatRequest,
+    onToken?: TokenHandler,
+    opts?: ChatStreamOptions,
+  ): Promise<ChatResult> {
     let content = "";
     let thinking = "";
     let evalCount = 0;
     let promptEvalCount = 0;
     let doneReason: string | null = null;
 
-    await this.transport.chatStream(req, (chunk: OllamaChatChunk) => {
+    const onChunk = (chunk: OllamaChatChunk) => {
       const delta = chunk.message?.content ?? "";
       const tdelta = chunk.message?.thinking ?? "";
       if (tdelta) thinking += tdelta;
@@ -39,7 +43,8 @@ export class OllamaClient {
       if (typeof chunk.eval_count === "number") evalCount = chunk.eval_count;
       if (typeof chunk.prompt_eval_count === "number") promptEvalCount = chunk.prompt_eval_count;
       if (chunk.done_reason) doneReason = chunk.done_reason;
-    });
+    };
+    await this.transport.chatStream(req, onChunk, opts);
 
     return { content, thinking, evalCount, promptEvalCount, doneReason };
   }

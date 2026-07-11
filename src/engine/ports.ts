@@ -25,6 +25,12 @@ export interface Db {
   select<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 
+/** Options for a streamed chat call. */
+export interface ChatStreamOptions {
+  /** abort the in-flight generation; the stream ends with done_reason "cancel" */
+  signal?: AbortSignal;
+}
+
 /**
  * Talks to the local Ollama server. In the app this is the Rust reqwest proxy
  * (streaming chat over a Channel; plain POST/GET otherwise) — which avoids CORS
@@ -32,7 +38,11 @@ export interface Db {
  */
 export interface OllamaTransport {
   /** stream a chat completion; `onChunk` fires per NDJSON object. */
-  chatStream(req: OllamaChatRequest, onChunk: (chunk: OllamaChatChunk) => void): Promise<void>;
+  chatStream(
+    req: OllamaChatRequest,
+    onChunk: (chunk: OllamaChatChunk) => void,
+    opts?: ChatStreamOptions,
+  ): Promise<void>;
   /** POST a non-streaming JSON endpoint (e.g. /api/embed). */
   post<T = unknown>(path: string, body: unknown): Promise<T>;
   /** GET a JSON endpoint (e.g. /api/tags, /api/version). */

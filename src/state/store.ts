@@ -14,19 +14,24 @@ import silasAvatar from "@assets/silas.jpg?inline";
 import miraAvatar from "@assets/mira.jpg?inline";
 import leoAvatar from "@assets/leo.jpg?inline";
 import type { TauriOllama } from "@adapters/tauriOllama";
-import { Engine } from "@engine/index";
+import { Engine, DEFAULT_CASCADE } from "@engine/index";
 import type {
   AppSettings,
   Attachment,
+  CascadeConfig,
   Character,
   Conversation,
   Memory,
   Message,
   Relationship,
+  RoomParticipantView,
+  RoomPhase,
+  RoomView,
   User,
 } from "@engine/index";
+import { RoomSession, type Visibility } from "./roomSession";
 
-export type View = "welcome" | "hall" | "conversation" | "create";
+export type View = "welcome" | "hall" | "conversation" | "create" | "room";
 
 /** Portraits for seeded starters, inlined as data URLs so they survive rebuilds. */
 const STARTER_AVATARS: Record<string, string> = {
@@ -56,6 +61,16 @@ export interface AppState {
   ollamaOnline: boolean;
   models: string[];
   error: string | null;
+  /* -------- gatherings (group rooms) --------
+     deliberately separate from the 1:1 streaming fields: the room composer
+     stays enabled while characters speak — posting mid-cascade is designed */
+  rooms: Conversation[];
+  currentRoomId: string | null;
+  roomParticipants: RoomParticipantView[];
+  roomMessages: Message[];
+  roomPhase: RoomPhase;
+  roomStreamingCharacterId: string | null;
+  roomStreamingText: string;
 }
 
 function applyTheme(theme: "dark" | "light"): void {
@@ -67,6 +82,7 @@ let tempCounter = 0;
 export class AppStore {
   private state: AppState;
   private listeners = new Set<() => void>();
+  private roomSession: RoomSession | null = null;
 
   constructor(
     readonly engine: Engine,
@@ -91,7 +107,17 @@ export class AppStore {
       ollamaOnline: false,
       models: [],
       error: null,
+      rooms: [],
+      currentRoomId: null,
+      roomParticipants: [],
+      roomMessages: [],
+      roomPhase: "idle",
+      roomStreamingCharacterId: null,
+      roomStreamingText: "",
     };
+    if (typeof window !== "undefined") {
+      window.addEventListener("beforeunload", () => this.closeRoomSession());
+    }
   }
 
   getState = (): AppState => this.state;
@@ -126,9 +152,11 @@ export class AppStore {
     }
 
     let characters: Character[] = [];
+    let rooms: Conversation[] = [];
     if (onboarded) {
       await this.engine.seedStartersIfEmpty(STARTER_AVATARS);
       characters = await this.engine.listCharacters();
+      rooms = await this.engine.listRooms();
     }
 
     this.set({
@@ -138,6 +166,7 @@ export class AppStore {
       user: this.engine.getUser(),
       view: onboarded ? "hall" : "welcome",
       characters,
+      rooms,
       ollamaOnline: online,
       models,
     });
@@ -166,14 +195,17 @@ export class AppStore {
   }
 
   gotoHall(): void {
+    this.closeRoomSession();
     this.set({ view: "hall", currentCharacterId: null, studioOpen: false });
   }
 
   gotoCreate(): void {
+    this.closeRoomSession();
     this.set({ view: "create", currentCharacterId: null, studioOpen: false });
   }
 
   async openCharacter(id: string): Promise<void> {
+    this.closeRoomSession();
     const view = await this.engine.openCharacter(id);
     this.set({
       currentCharacterId: id,
@@ -207,6 +239,7 @@ export class AppStore {
       role: "user",
       content: trimmed,
       attachments,
+      speakerCharacterId: null,
       tokens: 0,
       createdAt: Date.now(),
       summarized: false,
@@ -240,6 +273,131 @@ export class AppStore {
         error: e instanceof Error ? e.message : String(e),
       });
     }
+  }
+
+  // ---------------- gatherings (group rooms) ----------------
+
+  async loadRooms(): Promise<void> {
+    this.set({ rooms: await this.engine.listRooms() });
+  }
+
+  async createRoom(name: string, characterIds: string[]): Promise<void> {
+    const room = await this.engine.createRoom(name.trim() || "The gathering", characterIds);
+    await this.loadRooms();
+    this.enterRoom(room);
+  }
+
+  async openRoom(roomId: string): Promise<void> {
+    const room = await this.engine.openRoom(roomId);
+    this.enterRoom(room);
+  }
+
+  private enterRoom(room: RoomView): void {
+    this.closeRoomSession();
+    this.set({
+      view: "room",
+      currentRoomId: room.conversation.id,
+      currentCharacterId: null,
+      relationship: null,
+      studioOpen: false,
+      roomParticipants: room.participants,
+      roomMessages: room.messages,
+      roomPhase: "idle",
+      roomStreamingCharacterId: null,
+      roomStreamingText: "",
+      error: null,
+    });
+    const s = this.state.settings;
+    const cfg: CascadeConfig = {
+      ...DEFAULT_CASCADE,
+      followUpBase: s.roomFollowUpBase,
+      idleMs: s.roomIdleSeconds * 1000,
+      idleCapMessages: s.roomIdleCapMessages,
+    };
+    this.roomSession = new RoomSession(room, cfg, {
+      engine: this.engine,
+      scheduler: {
+        set: (fn, ms) => window.setTimeout(fn, ms),
+        clear: (id) => window.clearTimeout(id),
+      },
+      visibility: domVisibility(),
+      rng: Math.random,
+      callbacks: {
+        onPhase: (phase) => this.set({ roomPhase: phase }),
+        onMessage: (message) => {
+          if (message.conversationId !== this.state.currentRoomId) return;
+          this.set({ roomMessages: [...this.state.roomMessages, message] });
+        },
+        onStreaming: (characterId, text) =>
+          this.set({ roomStreamingCharacterId: characterId, roomStreamingText: text }),
+        onError: (message) => this.set({ error: message }),
+      },
+    });
+  }
+
+  async sendRoomMessage(content: string, attachments: Attachment[] = []): Promise<void> {
+    const trimmed = content.trim();
+    if (!this.roomSession || (!trimmed && attachments.length === 0)) return;
+    try {
+      await this.roomSession.postUserMessage(trimmed, attachments);
+    } catch (e) {
+      this.set({ error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /** Stop timers and streams; called on any navigation away from the room. */
+  closeRoomSession(): void {
+    this.roomSession?.dispose();
+    this.roomSession = null;
+    if (this.state.currentRoomId) {
+      this.set({
+        currentRoomId: null,
+        roomParticipants: [],
+        roomMessages: [],
+        roomPhase: "idle",
+        roomStreamingCharacterId: null,
+        roomStreamingText: "",
+      });
+    }
+  }
+
+  async updateRoomParticipants(roomId: string, characterIds: string[]): Promise<void> {
+    const current = await this.engine.openRoom(roomId);
+    const present = new Set(current.participants.map((p) => p.character.id));
+    const wanted = new Set(characterIds);
+    for (const id of characterIds) {
+      if (!present.has(id)) await this.engine.addRoomParticipant(roomId, id);
+    }
+    for (const id of present) {
+      if (!wanted.has(id)) await this.engine.removeRoomParticipant(roomId, id);
+    }
+    await this.loadRooms();
+    // restart the session against the new roster
+    if (this.state.currentRoomId === roomId) await this.openRoom(roomId);
+  }
+
+  async renameRoom(roomId: string, name: string): Promise<void> {
+    const room = await this.engine.openRoom(roomId);
+    await this.engine.updateConversation({ ...room.conversation, title: name.trim() || room.conversation.title });
+    await this.loadRooms();
+  }
+
+  async deleteRoom(roomId: string): Promise<void> {
+    if (this.state.currentRoomId === roomId) {
+      this.closeRoomSession();
+      this.set({ view: "hall" });
+    }
+    await this.engine.deleteConversation(roomId);
+    await this.loadRooms();
+  }
+
+  /** Open a participant's Studio from inside the room. */
+  async openStudioFor(characterId: string): Promise<void> {
+    const relationship = await this.engine.repos.ensureRelationship(
+      this.state.user.id,
+      characterId,
+    );
+    this.set({ currentCharacterId: characterId, relationship, studioOpen: true });
   }
 
   toggleStudio(): void {
@@ -296,6 +454,37 @@ export class AppStore {
   clearError(): void {
     this.set({ error: null });
   }
+}
+
+/** Visible ⇔ the document is visible AND the window has focus — in a Tauri
+ *  webview, minimizing fires visibilitychange but mere focus loss does not,
+ *  and the idle timer should pause for both. */
+function domVisibility(): Visibility {
+  let focused = typeof document !== "undefined" ? document.hasFocus() : true;
+  const isVisible = () =>
+    typeof document === "undefined" || (document.visibilityState === "visible" && focused);
+  return {
+    isVisible,
+    subscribe(cb) {
+      const notify = () => cb(isVisible());
+      const onFocus = () => {
+        focused = true;
+        notify();
+      };
+      const onBlur = () => {
+        focused = false;
+        notify();
+      };
+      document.addEventListener("visibilitychange", notify);
+      window.addEventListener("focus", onFocus);
+      window.addEventListener("blur", onBlur);
+      return () => {
+        document.removeEventListener("visibilitychange", notify);
+        window.removeEventListener("focus", onFocus);
+        window.removeEventListener("blur", onBlur);
+      };
+    },
+  };
 }
 
 // ---------------- React glue ----------------

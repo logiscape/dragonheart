@@ -6,6 +6,7 @@ import { Sidebar } from "@ui/screens/Sidebar";
 import { Hall } from "@ui/screens/Hall";
 import { Conversation } from "@ui/screens/Conversation";
 import { CreateCharacter } from "@ui/screens/CreateCharacter";
+import { Room } from "@ui/screens/Room";
 import { Studio } from "@ui/screens/studio/Studio";
 
 export function App() {
@@ -21,6 +22,11 @@ export function App() {
         <Hall />
       ) : s.view === "create" ? (
         <CreateCharacter />
+      ) : s.view === "room" ? (
+        <React.Fragment>
+          <Room />
+          {s.studioOpen ? <Studio /> : null}
+        </React.Fragment>
       ) : (
         <React.Fragment>
           <Conversation />

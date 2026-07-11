@@ -85,6 +85,7 @@ export function makeConversation(over: Partial<Conversation> = {}): Conversation
   return {
     id: "conv-1",
     relationshipId: "rel-1",
+    kind: "direct",
     title: null,
     sceneState: null,
     startedAt: 1000,
@@ -92,6 +93,16 @@ export function makeConversation(over: Partial<Conversation> = {}): Conversation
     lastSummaryThroughMessageId: null,
     ...over,
   };
+}
+
+export function makeRoomConversation(over: Partial<Conversation> = {}): Conversation {
+  return makeConversation({
+    id: "room-1",
+    relationshipId: null,
+    kind: "room",
+    title: "The Hearth",
+    ...over,
+  });
 }
 
 let msgCounter = 0;
@@ -102,6 +113,7 @@ export function makeMessage(over: Partial<Message> = {}): Message {
     role: "user",
     content: "hello",
     attachments: [],
+    speakerCharacterId: null,
     tokens: 0,
     createdAt: 1000 + msgCounter,
     summarized: false,
@@ -113,6 +125,7 @@ export function makeMemory(over: Partial<Memory> = {}): Memory {
   return {
     id: "mem-1",
     relationshipId: "rel-1",
+    roomId: null,
     content: "User takes their tea black.",
     kind: "preference",
     keys: ["tea"],

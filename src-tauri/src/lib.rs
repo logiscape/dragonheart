@@ -6,8 +6,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
+        .manage(ollama::StreamRegistry::default())
         .invoke_handler(tauri::generate_handler![
             ollama::ollama_chat_stream,
+            ollama::ollama_chat_cancel,
             ollama::ollama_post,
             ollama::ollama_get,
             files::read_file_bytes,

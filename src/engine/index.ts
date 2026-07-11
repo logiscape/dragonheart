@@ -12,19 +12,23 @@ import { systemClock } from "./ports";
 import { initSchema } from "./db/schema";
 import { Repos } from "./db/repositories";
 import { OllamaClient } from "./ollama";
-import { assembleContext, resolveModel } from "./context";
+import { assembleContext, resolveModel, resolveRoomModel, sanitizeGroupReply } from "./context";
 import { triggerLore } from "./lorebook";
 import {
   rankMemoriesForRecall,
   summarizeRollup,
+  summarizeGroupRollup,
+  formatGroupTranscript,
   extractMemories,
   shouldRollup,
+  type GroupSpeaker,
   type MemoryCandidate,
 } from "./memory";
 import { estimateTokens, estimateMessageTokens } from "./tokens";
 import { parseJsonLoose } from "./util";
 import { soulToPrompt, blankSoul, normalizeSoul } from "./soul";
 import { runProbes, DEFAULT_PROBES, type Probe, type ProbeResult } from "./personaProbe";
+import { createOllamaRoomJudge, type RoomJudge, type RosterEntry } from "./roomJudge";
 import {
   parseCardBytes,
   cardToDraft,
@@ -54,6 +58,16 @@ import { starterCharacters, starterLore } from "./seed";
 export * from "./types";
 export { DEFAULT_PROBES } from "./personaProbe";
 export type { Probe, ProbeResult } from "./personaProbe";
+export { RoomOrchestrator, DEFAULT_CASCADE } from "./orchestrator";
+export type {
+  CascadeConfig,
+  OrchestratorContext,
+  OrchestratorEffect,
+  OrchestratorEvent,
+  RoomPhase,
+} from "./orchestrator";
+export type { RoomJudge, RosterEntry, TranscriptLine } from "./roomJudge";
+export { sanitizeGroupReply } from "./context";
 
 export interface ConversationView {
   relationship: Relationship;
@@ -78,6 +92,46 @@ export interface SendOptions {
   onToken?: (delta: string, full: string) => void;
 }
 
+// ---------------- group rooms ----------------
+
+export interface RoomParticipantView {
+  character: Character;
+  /** the user × character bond — memories, affect, persona all live here */
+  relationship: Relationship;
+  joinedAt: number;
+  leftAt: number | null;
+  talkativeness: number;
+}
+
+export interface RoomView {
+  conversation: Conversation;
+  /** currently present participants */
+  participants: RoomParticipantView[];
+  messages: Message[];
+}
+
+export interface TurnOptions {
+  onToken?: (delta: string, full: string) => void;
+  /** abort the generation; the turn throws TurnAbortedError, persisting nothing */
+  signal?: AbortSignal;
+  /** skip per-turn rollup/affect; the caller batches them via runRoomMaintenance */
+  deferMaintenance?: boolean;
+}
+
+export interface CharacterTurnResult {
+  message: Message;
+  thinking: string;
+  diagnostics: SendDiagnostics;
+}
+
+/** Thrown when a character turn is aborted mid-stream; nothing was persisted. */
+export class TurnAbortedError extends Error {
+  constructor() {
+    super("Character turn aborted");
+    this.name = "TurnAbortedError";
+  }
+}
+
 export interface CharacterDraftInput {
   name: string;
   epithet?: string;
@@ -96,6 +150,10 @@ export interface CharacterDraftInput {
 }
 
 export class Engine {
+  /** conversations with a rollup pass running — turns can finish in quick
+   *  succession in rooms, and the same slice must not be summarized twice */
+  private rollupInFlight = new Set<string>();
+
   private constructor(
     readonly repos: Repos,
     readonly ollama: OllamaClient,
@@ -292,6 +350,7 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
   }> {
     const conversation = await this.repos.getConversation(conversationId);
     if (!conversation) throw new Error("Conversation not found");
+    if (!conversation.relationshipId) throw new Error("Not a direct conversation");
     const relationship = await this.repos.getRelationshipById(conversation.relationshipId);
     if (!relationship) throw new Error("Relationship not found");
     const character = await this.repos.getCharacter(relationship.characterId);
@@ -299,6 +358,334 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     const personaId = relationship.personaId ?? this.user.defaultPersonaId;
     const persona = personaId ? await this.repos.getPersona(personaId) : null;
     return { conversation, relationship, character, persona };
+  }
+
+  // ---------------- group rooms ----------------
+
+  async createRoom(
+    name: string,
+    characterIds: string[],
+    sceneState: string | null = null,
+  ): Promise<RoomView> {
+    const conversation = await this.repos.createRoomConversation(name, sceneState);
+    for (const id of characterIds) {
+      // joining a room gives a character the same bond row a first 1:1 open
+      // would — their memories/affect/persona work identically in both
+      await this.repos.ensureRelationship(this.user.id, id);
+      await this.repos.addParticipant(conversation.id, id);
+    }
+    return this.openRoom(conversation.id);
+  }
+
+  async openRoom(conversationId: string): Promise<RoomView> {
+    const conversation = await this.repos.getConversation(conversationId);
+    if (!conversation || conversation.kind !== "room") throw new Error("Room not found");
+    const participants = await this.loadParticipants(conversationId);
+    const messages = await this.repos.listMessages(conversationId);
+    return { conversation, participants, messages };
+  }
+
+  async listRooms(): Promise<Conversation[]> {
+    return this.repos.listRoomConversations();
+  }
+
+  async addRoomParticipant(conversationId: string, characterId: string): Promise<RoomView> {
+    await this.repos.ensureRelationship(this.user.id, characterId);
+    await this.repos.addParticipant(conversationId, characterId);
+    return this.openRoom(conversationId);
+  }
+
+  async removeRoomParticipant(conversationId: string, characterId: string): Promise<RoomView> {
+    await this.repos.removeParticipant(conversationId, characterId);
+    return this.openRoom(conversationId);
+  }
+
+  private async loadParticipants(
+    conversationId: string,
+    includeLeft = false,
+  ): Promise<RoomParticipantView[]> {
+    const rows = await this.repos.listParticipants(conversationId, includeLeft);
+    const out: RoomParticipantView[] = [];
+    for (const p of rows) {
+      const character = await this.repos.getCharacter(p.characterId);
+      if (!character) continue; // deleted character — soft-left already
+      const relationship = await this.repos.ensureRelationship(this.user.id, p.characterId);
+      out.push({
+        character,
+        relationship,
+        joinedAt: p.joinedAt,
+        leftAt: p.leftAt,
+        talkativeness: p.talkativeness,
+      });
+    }
+    return out;
+  }
+
+  /** A judge for a room's roster, on the shared model — see roomJudge.ts. */
+  createRoomJudge(roster: RosterEntry[], rng?: () => number): RoomJudge {
+    return createOllamaRoomJudge(this.ollama, {
+      model: resolveRoomModel(this.settings),
+      numCtx: this.settings.numCtx,
+      roster,
+      userName: this.user.displayName,
+      ...(rng ? { rng } : {}),
+    });
+  }
+
+  /** Persist a user message into a room, decoupled from any generation. */
+  async postUserMessage(
+    conversationId: string,
+    content: string,
+    attachments: Attachment[] = [],
+  ): Promise<Message> {
+    const conversation = await this.repos.getConversation(conversationId);
+    if (!conversation) throw new Error("Conversation not found");
+    return this.repos.addMessage({
+      conversationId,
+      role: "user",
+      content,
+      attachments,
+      tokens: estimateTokens(content),
+      summarized: false,
+    });
+  }
+
+  /**
+   * One character speaks in a room. Mirrors `send()` with the speaker's own
+   * full layered context (soul, bond, private memories, lore) — the fidelity
+   * guarantee — over speaker-labeled shared history. The user's message, if
+   * any, is already in history (postUserMessage), so `newUser` is null.
+   */
+  async generateCharacterTurn(
+    conversationId: string,
+    characterId: string,
+    opts: TurnOptions = {},
+  ): Promise<CharacterTurnResult> {
+    const conversation = await this.repos.getConversation(conversationId);
+    if (!conversation || conversation.kind !== "room") throw new Error("Room not found");
+    const participants = await this.loadParticipants(conversationId);
+    const self = participants.find((p) => p.character.id === characterId);
+    if (!self) throw new Error("Character is not present in this room");
+    const { character, relationship } = self;
+    const personaId = relationship.personaId ?? this.user.defaultPersonaId;
+    const persona = personaId ? await this.repos.getPersona(personaId) : null;
+
+    const verbatim = await this.repos.listUnsummarized(conversationId);
+    const speakers: GroupSpeaker[] = participants.map((p) => ({
+      id: p.character.id,
+      name: p.character.name,
+    }));
+    const recentText = formatGroupTranscript(verbatim.slice(-6), speakers, this.user.displayName);
+    const queryEmbedding = await this.embed(recentText);
+
+    // Layer 4 — this speaker's own recall + lore
+    const recalled = await this.recallForRoom(
+      relationship.id,
+      conversationId,
+      recentText,
+      queryEmbedding,
+    );
+    const lore = await this.triggeredLore(character.id, relationship.id, recentText, queryEmbedding);
+
+    // rooms pin one model + one num_ctx for every call — never a runner reload
+    const model = resolveRoomModel(this.settings);
+    const assembled = assembleContext({
+      numCtx: this.settings.numCtx,
+      temperature: this.settings.temperature,
+      model,
+      character,
+      persona,
+      userName: this.user.displayName,
+      relationship,
+      conversation,
+      verbatim,
+      newUser: null,
+      triggeredLore: lore,
+      recalledMemories: recalled,
+      now: this.clock.now(),
+      group: {
+        roomName: conversation.title ?? "The gathering",
+        selfCharacterId: character.id,
+        participants: participants.map((p) => ({
+          id: p.character.id,
+          name: p.character.name,
+          epithet: p.character.epithet,
+          blurb: p.character.blurb,
+        })),
+      },
+    });
+
+    if (opts.signal?.aborted) throw new TurnAbortedError();
+    const result = await this.ollama.chat(
+      assembled.request,
+      opts.onToken,
+      opts.signal ? { signal: opts.signal } : undefined,
+    );
+    if (opts.signal?.aborted || result.doneReason === "cancel") throw new TurnAbortedError();
+
+    const otherNames = [
+      this.user.displayName,
+      ...participants.filter((p) => p.character.id !== characterId).map((p) => p.character.name),
+    ];
+    const replyText = sanitizeGroupReply(result.content, character.name, otherNames) || "…";
+    const message = await this.repos.addMessage({
+      conversationId,
+      role: "assistant",
+      content: replyText,
+      attachments: [],
+      speakerCharacterId: characterId,
+      tokens: result.evalCount || estimateTokens(replyText),
+      summarized: false,
+    });
+
+    if (recalled.length) {
+      await this.repos.touchRecalled(recalled.map((m) => m.id), this.clock.now());
+    }
+
+    if (!opts.deferMaintenance) {
+      void this.runRoomMaintenance(conversationId, [characterId]).catch((e) =>
+        console.error("room maintenance failed:", e),
+      );
+    }
+
+    return {
+      message,
+      thinking: result.thinking,
+      diagnostics: { recalledMemories: recalled, triggeredLore: lore, budget: assembled.budget },
+    };
+  }
+
+  /**
+   * Deferred background work after a cascade: one affect note per character
+   * who spoke, then the rollup check. Kept sequential so the calls queue
+   * behind each other rather than piling onto Ollama between speakers.
+   */
+  async runRoomMaintenance(conversationId: string, spokeCharacterIds: string[]): Promise<void> {
+    const conversation = await this.repos.getConversation(conversationId);
+    if (!conversation || conversation.kind !== "room") return;
+    const participants = await this.loadParticipants(conversationId);
+    const speakers: GroupSpeaker[] = participants.map((p) => ({
+      id: p.character.id,
+      name: p.character.name,
+    }));
+    const verbatim = await this.repos.listUnsummarized(conversationId);
+    const excerpt = formatGroupTranscript(verbatim.slice(-8), speakers, this.user.displayName);
+    const model = resolveRoomModel(this.settings);
+    const roomName = conversation.title ?? "the gathering";
+
+    for (const id of [...new Set(spokeCharacterIds)]) {
+      const p = participants.find((x) => x.character.id === id);
+      if (!p || !excerpt.trim()) continue;
+      await this.updateAffectFromTranscript(p.relationship.id, p.character, excerpt, model, roomName);
+    }
+    await this.maybeRollupRoom(conversationId);
+  }
+
+  /** Room recall: the speaker's own memories, plus the room's own continuity summary. */
+  private async recallForRoom(
+    relationshipId: string,
+    conversationId: string,
+    recentText: string,
+    queryEmbedding: number[] | null,
+  ): Promise<Memory[]> {
+    const memories = await this.repos.listEnabledMemories(relationshipId);
+    const ranked = rankMemoriesForRecall(memories, {
+      queryEmbedding,
+      recentText,
+      now: this.clock.now(),
+      k: 6,
+    });
+    const latest = await this.repos.latestRoomSummary(conversationId);
+    if (latest && !ranked.some((m) => m.id === latest.id)) ranked.unshift(latest);
+    return ranked;
+  }
+
+  /**
+   * Room rollup: one tagged pass over the speaker-labeled transcript. The
+   * summary stays room-scoped (shared continuity); each tagged fact is copied
+   * into every retaining character's own relationship, which is what carries
+   * it back into their one-on-one conversations.
+   */
+  private async maybeRollupRoom(conversationId: string): Promise<void> {
+    if (this.rollupInFlight.has(conversationId)) return;
+    this.rollupInFlight.add(conversationId);
+    try {
+      const conversation = await this.repos.getConversation(conversationId);
+      if (!conversation || conversation.kind !== "room") return;
+      const unsummarized = await this.repos.listUnsummarized(conversationId);
+      const historyTokens = unsummarized.reduce((s, m) => s + estimateMessageTokens(m), 0);
+      if (!shouldRollup(historyTokens, this.settings.rollupThresholdTokens)) return;
+
+      const keepN = this.settings.recentVerbatimTurns;
+      if (unsummarized.length <= keepN) return;
+      const older = unsummarized.slice(0, unsummarized.length - keepN);
+      if (older.length === 0) return;
+
+      // include departed participants: they may have spoken in (and should
+      // retain memories from) the slice being folded out
+      const everyone = await this.loadParticipants(conversationId, true);
+      const speakers: GroupSpeaker[] = everyone.map((p) => ({
+        id: p.character.id,
+        name: p.character.name,
+      }));
+
+      const model = resolveRoomModel(this.settings);
+      const { summary, facts } = await summarizeGroupRollup(
+        this.ollama,
+        model,
+        this.settings.numCtx,
+        older,
+        speakers,
+        this.user.displayName,
+      );
+
+      if (summary) {
+        const embedding = await this.embed(summary.content);
+        await this.repos.createMemory({
+          relationshipId: null,
+          roomId: conversationId,
+          content: summary.content,
+          kind: summary.kind,
+          keys: summary.keys,
+          embedding,
+          salience: summary.salience,
+          sourceMessageIds: summary.sourceMessageIds,
+          pinned: false,
+          enabled: true,
+        });
+      }
+      for (const fact of facts) {
+        // embed once; the vector depends only on the content
+        const embedding = await this.embed(fact.content);
+        for (const characterId of fact.retainedByIds) {
+          const holder = everyone.find((p) => p.character.id === characterId);
+          if (!holder) continue;
+          await this.repos.createMemory({
+            relationshipId: holder.relationship.id,
+            roomId: conversationId,
+            content: fact.content,
+            kind: fact.kind,
+            keys: fact.keys,
+            embedding,
+            salience: fact.salience,
+            sourceMessageIds: fact.sourceMessageIds,
+            pinned: false,
+            enabled: true,
+          });
+        }
+      }
+
+      await this.repos.markSummarized(older.map((m) => m.id));
+      const lastOlder = older[older.length - 1];
+      if (lastOlder) {
+        await this.repos.updateConversation({
+          ...conversation,
+          lastSummaryThroughMessageId: lastOlder.id,
+        });
+      }
+    } finally {
+      this.rollupInFlight.delete(conversationId);
+    }
   }
 
   // ---------------- the turn loop ----------------
@@ -375,9 +762,12 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     // carried feeling: note privately how the exchange landed, for next turn.
     // Runs on the same model that generated the reply so it never forces Ollama
     // to unload/reload a second model between turns.
-    void this.updateAffect(relationship.id, character, content, replyText, model).catch((e) =>
-      console.error("affect update failed:", e),
-    );
+    void this.updateAffectFromTranscript(
+      relationship.id,
+      character,
+      `${this.user.displayName}: ${content}\n${character.name}: ${replyText}`,
+      model,
+    ).catch((e) => console.error("affect update failed:", e));
 
     return {
       user: userMsg,
@@ -427,23 +817,24 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
    * user. Injected into Layer 3 next turn, so feeling persists across turns
    * and sessions. Background only — never blocks the reply. Runs on the same
    * model that generated the reply (passed in) to avoid an Ollama model swap.
+   * In rooms, the excerpt is a speaker-labeled slice and `roomName` is set.
    */
-  private async updateAffect(
+  private async updateAffectFromTranscript(
     relationshipId: string,
     character: Character,
-    userText: string,
-    replyText: string,
+    excerpt: string,
     model: string,
+    roomName?: string,
   ): Promise<void> {
-    const sys = `You are the private inner voice of ${character.name}. Given the latest exchange, write ONE sentence (under 25 words), first person, noting how it left you feeling about ${this.user.displayName} and anything you're carrying into next time. Be honest — warmth, hurt, worry, delight, all allowed. Return ONLY the sentence.`;
+    const setting = roomName
+      ? ` The exchange happened in the shared room "${roomName}", with others present.`
+      : "";
+    const sys = `You are the private inner voice of ${character.name}.${setting} Given the latest exchange, write ONE sentence (under 25 words), first person, noting how it left you feeling about ${this.user.displayName} and anything you're carrying into next time. Be honest — warmth, hurt, worry, delight, all allowed. Return ONLY the sentence.`;
     const result = await this.ollama.chat({
       model,
       messages: [
         { role: "system", content: sys },
-        {
-          role: "user",
-          content: `${this.user.displayName}: ${userText}\n${character.name}: ${replyText}`,
-        },
+        { role: "user", content: excerpt },
       ],
       // match the reply's context size so Ollama reuses the loaded runner
       // rather than reloading the model for a smaller window
@@ -459,46 +850,52 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
   }
 
   private async maybeRollup(conversationId: string): Promise<void> {
-    const { conversation, relationship, character } = await this.loadBundle(conversationId);
-    const unsummarized = await this.repos.listUnsummarized(conversationId);
-    const historyTokens = unsummarized.reduce((s, m) => s + estimateMessageTokens(m), 0);
-    if (!shouldRollup(historyTokens, this.settings.rollupThresholdTokens)) return;
+    if (this.rollupInFlight.has(conversationId)) return;
+    this.rollupInFlight.add(conversationId);
+    try {
+      const { conversation, relationship, character } = await this.loadBundle(conversationId);
+      const unsummarized = await this.repos.listUnsummarized(conversationId);
+      const historyTokens = unsummarized.reduce((s, m) => s + estimateMessageTokens(m), 0);
+      if (!shouldRollup(historyTokens, this.settings.rollupThresholdTokens)) return;
 
-    const keepN = this.settings.recentVerbatimTurns;
-    if (unsummarized.length <= keepN) return;
-    const older = unsummarized.slice(0, unsummarized.length - keepN);
-    if (older.length === 0) return;
+      const keepN = this.settings.recentVerbatimTurns;
+      if (unsummarized.length <= keepN) return;
+      const older = unsummarized.slice(0, unsummarized.length - keepN);
+      if (older.length === 0) return;
 
-    const model = this.settings.fastModel || resolveModel(relationship, character, this.settings.defaultModel);
-    const { summary, facts } = await summarizeRollup(
-      this.ollama,
-      model,
-      older,
-      character.name,
-      this.user.displayName,
-    );
-    const candidates: MemoryCandidate[] = [...(summary ? [summary] : []), ...facts];
-    for (const c of candidates) {
-      const embedding = await this.embed(c.content);
-      await this.repos.createMemory({
-        relationshipId: relationship.id,
-        content: c.content,
-        kind: c.kind,
-        keys: c.keys,
-        embedding,
-        salience: c.salience,
-        sourceMessageIds: c.sourceMessageIds,
-        pinned: false,
-        enabled: true,
-      });
-    }
-    await this.repos.markSummarized(older.map((m) => m.id));
-    const lastOlder = older[older.length - 1];
-    if (lastOlder) {
-      await this.repos.updateConversation({
-        ...conversation,
-        lastSummaryThroughMessageId: lastOlder.id,
-      });
+      const model = this.settings.fastModel || resolveModel(relationship, character, this.settings.defaultModel);
+      const { summary, facts } = await summarizeRollup(
+        this.ollama,
+        model,
+        older,
+        character.name,
+        this.user.displayName,
+      );
+      const candidates: MemoryCandidate[] = [...(summary ? [summary] : []), ...facts];
+      for (const c of candidates) {
+        const embedding = await this.embed(c.content);
+        await this.repos.createMemory({
+          relationshipId: relationship.id,
+          content: c.content,
+          kind: c.kind,
+          keys: c.keys,
+          embedding,
+          salience: c.salience,
+          sourceMessageIds: c.sourceMessageIds,
+          pinned: false,
+          enabled: true,
+        });
+      }
+      await this.repos.markSummarized(older.map((m) => m.id));
+      const lastOlder = older[older.length - 1];
+      if (lastOlder) {
+        await this.repos.updateConversation({
+          ...conversation,
+          lastSummaryThroughMessageId: lastOlder.id,
+        });
+      }
+    } finally {
+      this.rollupInFlight.delete(conversationId);
     }
   }
 
@@ -540,6 +937,8 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
   /** Extract durable memories from the recent exchange on demand (the user's
    *  "remember that?" affordance). Returns the freshly-created memories. */
   async extractMemoriesNow(conversationId: string): Promise<Memory[]> {
+    const conversation = await this.repos.getConversation(conversationId);
+    if (conversation?.kind === "room") return this.extractRoomMemoriesNow(conversationId);
     const { relationship, character } = await this.loadBundle(conversationId);
     const recent = (await this.repos.listUnsummarized(conversationId)).slice(-10);
     if (recent.length === 0) return [];
@@ -566,6 +965,49 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
           enabled: true,
         }),
       );
+    }
+    return created;
+  }
+
+  /** Room variant of extractMemoriesNow: the same tagged pass as room rollup,
+   *  fanned out to each retaining participant (no room summary is written). */
+  private async extractRoomMemoriesNow(conversationId: string): Promise<Memory[]> {
+    const recent = (await this.repos.listUnsummarized(conversationId)).slice(-10);
+    if (recent.length === 0) return [];
+    const everyone = await this.loadParticipants(conversationId, true);
+    const speakers: GroupSpeaker[] = everyone.map((p) => ({
+      id: p.character.id,
+      name: p.character.name,
+    }));
+    const { facts } = await summarizeGroupRollup(
+      this.ollama,
+      resolveRoomModel(this.settings),
+      this.settings.numCtx,
+      recent,
+      speakers,
+      this.user.displayName,
+    );
+    const created: Memory[] = [];
+    for (const fact of facts) {
+      const embedding = await this.embed(fact.content);
+      for (const characterId of fact.retainedByIds) {
+        const holder = everyone.find((p) => p.character.id === characterId);
+        if (!holder) continue;
+        created.push(
+          await this.repos.createMemory({
+            relationshipId: holder.relationship.id,
+            roomId: conversationId,
+            content: fact.content,
+            kind: fact.kind,
+            keys: fact.keys,
+            embedding,
+            salience: fact.salience,
+            sourceMessageIds: fact.sourceMessageIds,
+            pinned: false,
+            enabled: true,
+          }),
+        );
+      }
     }
     return created;
   }

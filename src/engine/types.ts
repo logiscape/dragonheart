@@ -194,9 +194,15 @@ export interface Relationship {
 // Conversations & messages
 // ---------------------------------------------------------------
 
+/** 'direct' = the classic one-on-one bond; 'room' = a shared gathering */
+export type ConversationKind = "direct" | "room";
+
 export interface Conversation {
   id: ID;
-  relationshipId: ID;
+  /** null for rooms — a room belongs to its participants, not one bond */
+  relationshipId: ID | null;
+  kind: ConversationKind;
+  /** the room name for kind==="room"; optional title otherwise */
   title: string | null;
   /** Layer 5: the current situation/setting, if the conversation has a frame */
   sceneState: string | null;
@@ -204,6 +210,17 @@ export interface Conversation {
   updatedAt: number;
   /** rollup watermark: messages up to here are folded into summary memories */
   lastSummaryThroughMessageId: ID | null;
+}
+
+/** A character's membership in a room conversation. */
+export interface RoomParticipant {
+  conversationId: ID;
+  characterId: ID;
+  joinedAt: number;
+  /** null while present; set when removed (soft leave — their messages remain) */
+  leftAt: number | null;
+  /** 0..1 inclination to chime in unprompted (orchestrator input) */
+  talkativeness: number;
 }
 
 export interface Attachment {
@@ -219,6 +236,8 @@ export interface Message {
   role: Role;
   content: string;
   attachments: Attachment[];
+  /** who spoke, for room assistant turns; null for user/system and 1:1 turns */
+  speakerCharacterId: ID | null;
   /** estimated token count */
   tokens: number;
   createdAt: number;
@@ -234,7 +253,10 @@ export type MemoryKind = "fact" | "event" | "preference" | "summary" | "tender";
 
 export interface Memory {
   id: ID;
-  relationshipId: ID;
+  /** null only for room-scoped summaries (continuity shared by the whole room) */
+  relationshipId: ID | null;
+  /** the room conversation this memory came from; null for 1:1 memories */
+  roomId: ID | null;
   content: string;
   kind: MemoryKind;
   /** keyword triggers for non-embedding recall */
@@ -272,6 +294,12 @@ export interface AppSettings {
   rollupThresholdTokens: number;
   /** how many of the most recent turns to always keep verbatim */
   recentVerbatimTurns: number;
+  /** seconds of room silence before a character stirs on their own; 0 = never */
+  roomIdleSeconds: number;
+  /** consecutive character messages (no user post) before a room goes quiet */
+  roomIdleCapMessages: number;
+  /** base probability that another character follows up after a reply */
+  roomFollowUpBase: number;
   theme: "dark" | "light";
 }
 
@@ -285,6 +313,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   semanticRecall: true,
   rollupThresholdTokens: 6000,
   recentVerbatimTurns: 12,
+  roomIdleSeconds: 120,
+  roomIdleCapMessages: 4,
+  roomFollowUpBase: 0.6,
   theme: "dark",
 };
 
@@ -316,6 +347,8 @@ export interface OllamaChatRequest {
   keep_alive?: string | number;
   /** Ollama "think" flag (newer servers); we also support the `<|think|>` token */
   think?: boolean;
+  /** "json" or a JSON Schema object — Ollama constrains decoding to match */
+  format?: string | Record<string, unknown>;
 }
 
 export interface OllamaChatChunk {

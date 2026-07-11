@@ -19,6 +19,7 @@
    ============================================================ */
 
 import type {
+  AppSettings,
   AssembledContext,
   Attachment,
   BudgetReport,
@@ -34,6 +35,15 @@ import type {
 } from "./types";
 import { normalizeSoul, soulToPrompt, voiceExamplesToPrompt } from "./soul";
 import { estimateTokens, estimateMessageTokens } from "./tokens";
+
+/** Present when assembling a turn inside a group room. */
+export interface GroupAssembleInput {
+  roomName: string;
+  /** the character who is about to speak */
+  selfCharacterId: string;
+  /** everyone present, including the speaker */
+  participants: Array<{ id: string; name: string; epithet?: string; blurb?: string }>;
+}
 
 export interface AssembleInput {
   numCtx: number;
@@ -54,6 +64,8 @@ export interface AssembleInput {
   now?: number;
   /** when the two of them last exchanged a message; null/absent → no gap line */
   lastInteractionAt?: number | null;
+  /** set when this turn happens inside a group room */
+  group?: GroupAssembleInput;
 }
 
 const MOOD_HINT: Record<string, string> = {
@@ -161,6 +173,21 @@ function buildSystem(input: AssembleInput): string {
     blocks.push(section("scene", conversation.sceneState.trim()));
   }
 
+  // Layer 5b — the room, when this turn happens in a gathering
+  if (input.group) {
+    const g = input.group;
+    const others = g.participants.filter((p) => p.id !== g.selfCharacterId);
+    const roomLines = [
+      `You are in "${g.roomName}" — a shared space, not a private conversation.`,
+      `Present with you:`,
+      `- ${userName || "they"} — the human you all know.`,
+      ...others.map((p) => `- ${p.name}${p.epithet ? ` — ${p.epithet}` : p.blurb ? ` — ${p.blurb}` : ""}`),
+      `In the conversation, other people's words appear as "Name: their words".`,
+      `You are ${character.name} and only ${character.name}. Speak in first person, as yourself. Never write dialogue or actions for ${userName || "them"} or the others — they speak for themselves. Do not prefix your reply with your own name. It's a shared fire: you may address anyone present, react to what others said, or stay brief when the moment isn't yours.`,
+    ];
+    blocks.push(section("room", roomLines.join("\n")));
+  }
+
   // Light behavioral nudges (kept minimal — identity, not task spec)
   const directives: string[] = [];
   if (!relationship.allowTopicChange) {
@@ -184,6 +211,82 @@ function toChatMessage(m: Message): ChatMessage {
   const cm: ChatMessage = { role: m.role, content: m.content };
   if (images.length) cm.images = images;
   return cm;
+}
+
+/* ---------------- group history rendering ----------------
+   From the speaking character's point of view: their own past turns stay
+   unlabeled `assistant` turns (teaching by example that replies carry no
+   name prefix); everyone else — the user and the other characters — becomes
+   a labeled "Name: words" line in `user` role. Contiguous foreign lines are
+   merged into one user message after budget fitting, preserving the
+   user/model alternation Gemma expects. */
+
+interface RenderedLine {
+  role: "user" | "assistant";
+  content: string;
+  images: string[];
+}
+
+function renderGroupLine(
+  m: Message,
+  group: GroupAssembleInput,
+  nameById: Map<string, string>,
+  userName: string,
+): RenderedLine {
+  const images = m.attachments
+    .filter((a): a is Attachment => a.kind === "image" && !!a.data)
+    .map((a) => a.data);
+  if (m.role === "assistant" && m.speakerCharacterId === group.selfCharacterId) {
+    return { role: "assistant", content: m.content, images };
+  }
+  const label =
+    m.role === "assistant"
+      ? (m.speakerCharacterId && nameById.get(m.speakerCharacterId)) || "Someone"
+      : userName || "They";
+  return { role: "user", content: `${label}: ${m.content}`, images };
+}
+
+function mergeRenderedLines(lines: RenderedLine[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const line of lines) {
+    const prev = out[out.length - 1];
+    if (line.role === "user" && prev && prev.role === "user") {
+      prev.content += `\n\n${line.content}`;
+      if (line.images.length) prev.images = [...(prev.images ?? []), ...line.images];
+    } else {
+      const cm: ChatMessage = { role: line.role, content: line.content };
+      if (line.images.length) cm.images = [...line.images];
+      out.push(cm);
+    }
+  }
+  return out;
+}
+
+/**
+ * Strip a self-label the model copied from the transcript convention, and cut
+ * the reply off where it starts speaking for someone else. Pure.
+ */
+export function sanitizeGroupReply(
+  text: string,
+  selfName: string,
+  otherNames: string[],
+): string {
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let out = text.trim();
+  const self = esc(selfName.trim());
+  out = out.replace(new RegExp(`^\\s*\\**\\s*${self}\\s*\\**\\s*[:：]\\s*`, "i"), "");
+  for (const name of otherNames) {
+    const n = name.trim();
+    if (!n) continue;
+    const m = out.match(new RegExp(`^\\s*\\**\\s*${esc(n)}\\s*\\**\\s*[:：]`, "im"));
+    if (m && m.index !== undefined) out = out.slice(0, m.index);
+  }
+  return out.trim();
+}
+
+/** Rooms pin every call to the one shared model — no per-character overrides. */
+export function resolveRoomModel(settings: AppSettings): string {
+  return settings.defaultModel;
 }
 
 /**
@@ -213,25 +316,59 @@ export function assembleContext(input: AssembleInput): AssembledContext {
   const newUserTokens = newUserMsg ? estimateMessageTokens(newUserMsg) : 0;
   const available = input.numCtx - systemTokens - reserve - newUserTokens;
 
-  // walk verbatim newest → oldest, keep what fits
-  const kept: Message[] = [];
+  let messages: ChatMessage[];
   let historyTokens = 0;
   let dropped = 0;
-  for (let i = input.verbatim.length - 1; i >= 0; i--) {
-    const m = input.verbatim[i]!;
-    const cost = estimateMessageTokens(m);
-    if (historyTokens + cost <= available || kept.length === 0) {
-      kept.push(m);
-      historyTokens += cost;
-    } else {
-      dropped = i + 1;
-      break;
-    }
-  }
-  kept.reverse();
 
-  const messages: ChatMessage[] = kept.map(toChatMessage);
-  if (newUserMsg) messages.push(newUserMsg);
+  if (input.group) {
+    // render every turn from the speaker's POV first (labels cost tokens),
+    // fit on the rendered lines, then merge contiguous foreign lines
+    const group = input.group;
+    const nameById = new Map(group.participants.map((p) => [p.id, p.name]));
+    const rendered = input.verbatim
+      .filter((m) => m.role !== "system")
+      .map((m) => renderGroupLine(m, group, nameById, input.userName));
+
+    const kept: RenderedLine[] = [];
+    for (let i = rendered.length - 1; i >= 0; i--) {
+      const line = rendered[i]!;
+      const cost = estimateMessageTokens({ content: line.content });
+      if (historyTokens + cost <= available || kept.length === 0) {
+        kept.push(line);
+        historyTokens += cost;
+      } else {
+        dropped = i + 1;
+        break;
+      }
+    }
+    kept.reverse();
+    if (newUserMsg) {
+      // the new user message follows the same labeled convention in a room
+      kept.push({
+        role: "user",
+        content: `${input.userName || "They"}: ${input.newUser!.content}`,
+        images: newUserMsg.images ?? [],
+      });
+    }
+    messages = mergeRenderedLines(kept);
+  } else {
+    // walk verbatim newest → oldest, keep what fits
+    const kept: Message[] = [];
+    for (let i = input.verbatim.length - 1; i >= 0; i--) {
+      const m = input.verbatim[i]!;
+      const cost = estimateMessageTokens(m);
+      if (historyTokens + cost <= available || kept.length === 0) {
+        kept.push(m);
+        historyTokens += cost;
+      } else {
+        dropped = i + 1;
+        break;
+      }
+    }
+    kept.reverse();
+    messages = kept.map(toChatMessage);
+    if (newUserMsg) messages.push(newUserMsg);
+  }
 
   const totalHistory = historyTokens + newUserTokens;
   const budget: BudgetReport = {

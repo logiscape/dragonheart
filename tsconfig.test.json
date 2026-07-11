@@ -4,6 +4,11 @@
     "types": ["node"],
     "noUnusedLocals": false
   },
-  "include": ["src/engine/__tests__/**/*.ts", "src/engine/**/*.ts"],
+  "include": [
+    "src/engine/__tests__/**/*.ts",
+    "src/engine/**/*.ts",
+    "src/state/__tests__/**/*.ts",
+    "src/state/roomSession.ts"
+  ],
   "exclude": []
 }
