@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import { inject } from "./_inject";
 
 inject(
@@ -56,7 +57,9 @@ export interface DialogProps {
 
 export function Dialog({ open = false, title = null, description = null, onClose, children, footer = null }: DialogProps) {
   if (!open) return null;
-  return (
+  // Portal to <body>: ancestors create stacking contexts (.dh-app > * sets
+  // z-index:1), which would trap the fixed scrim behind later siblings.
+  return createPortal(
     <div className="dh-dialog__scrim" onClick={onClose}>
       <div className="dh-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         {onClose ? (
@@ -71,6 +74,7 @@ export function Dialog({ open = false, title = null, description = null, onClose
         </div>
         {footer ? <div className="dh-dialog__footer">{footer}</div> : null}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
