@@ -1,15 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { Select, Switch, Input, Button } from "@ui/ds";
+import { Select, Switch } from "@ui/ds";
 import { useAppState, useStore } from "@state/store";
 import type { Character, MemoryDepth, Relationship } from "@engine/index";
+import { HearthSettings } from "./HearthSettings";
 
 const VOICE_PRESETS = ["Warm", "Measured", "Playful", "Grave"];
-
-const NUMCTX_OPTIONS = [
-  { value: "8192", label: "A few sessions" },
-  { value: "16384", label: "A whole season" },
-  { value: "32768", label: "Everything we've shared" },
-];
 
 const MEMORY_DEPTH_OPTIONS = [
   { value: "session", label: "A few sessions" },
@@ -47,15 +42,6 @@ export function VoiceTab() {
     );
   }
 
-  const modelOptions = s.models.length ? s.models : [s.settings.defaultModel];
-  const fastOptions = s.models.length ? s.models : [s.settings.fastModel];
-  const embedMatches = s.models.filter((m) => m.toLowerCase().includes("embed"));
-  const embedOptions = embedMatches.length ? embedMatches : [s.settings.embeddingModel];
-
-  const patchSettings = (patch: Parameters<typeof store.updateSettings>[0]) => {
-    void store.updateSettings(patch).then(flash);
-  };
-
   const saveCharacter = (next: Partial<Character>) => {
     void (async () => {
       await store.engine.updateCharacter({ ...character, ...next });
@@ -79,61 +65,7 @@ export function VoiceTab() {
       <p className="dh-field-lab">The hearth</p>
       <p className="dh-field-hint">Which minds answer, how much she holds, and where she lives.</p>
 
-      <Select
-        label="Underlying mind"
-        options={modelOptions}
-        value={s.settings.defaultModel}
-        onChange={(e) => patchSettings({ defaultModel: e.target.value })}
-      />
-
-      <Select
-        label="A faster mind"
-        options={fastOptions}
-        value={s.settings.fastModel}
-        onChange={(e) => patchSettings({ fastModel: e.target.value })}
-      />
-
-      <Select
-        label="How she remembers"
-        options={embedOptions}
-        value={s.settings.embeddingModel}
-        onChange={(e) => patchSettings({ embeddingModel: e.target.value })}
-      />
-
-      <Select
-        label="How much she holds"
-        options={NUMCTX_OPTIONS}
-        value={String(s.settings.numCtx)}
-        onChange={(e) => patchSettings({ numCtx: Number(e.target.value) })}
-      />
-
-      <div className="dh-switchstack">
-        <Switch
-          label="Remember by meaning, not just words"
-          checked={s.settings.semanticRecall}
-          onChange={(e) => patchSettings({ semanticRecall: e.target.checked })}
-        />
-      </div>
-
-      <Input
-        label="Where the hearth lives"
-        value={s.settings.ollamaBaseUrl}
-        placeholder="http://localhost:11434"
-        onChange={(e) => patchSettings({ ollamaBaseUrl: e.target.value })}
-      />
-
-      <p className="dh-field-hint">
-        {s.ollamaOnline ? (
-          "Here now"
-        ) : (
-          <React.Fragment>
-            The hearth is cold.{" "}
-            <Button size="sm" variant="secondary" onClick={() => void store.refreshHealth()}>
-              Look again
-            </Button>
-          </React.Fragment>
-        )}
-      </p>
+      <HearthSettings onSaved={flash} />
 
       <p className="dh-field-lab">Her manner</p>
       <p className="dh-field-hint">A coarse tuning of how {character.name.split(" ")[0] ?? character.name} carries herself.</p>

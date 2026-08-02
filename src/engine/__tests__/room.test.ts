@@ -81,6 +81,43 @@ describe.skipIf(!hasNodeSqlite())("engine rooms", () => {
     expect((await engine.listRooms()).map((r) => r.id)).toEqual([room.conversation.id]);
   });
 
+  it("stores per-participant talkativeness, clamped to 0..1", async () => {
+    const { elara, jax, room } = await twoCharacterRoom(engine);
+    // everyone starts neutral
+    expect(room.participants.map((p) => p.talkativeness)).toEqual([0.5, 0.5]);
+
+    await engine.setRoomTalkativeness(room.conversation.id, elara.id, 0.8);
+    await engine.setRoomTalkativeness(room.conversation.id, jax.id, -3);
+    const reopened = await engine.openRoom(room.conversation.id);
+    const byId = new Map(reopened.participants.map((p) => [p.character.id, p.talkativeness]));
+    expect(byId.get(elara.id)).toBe(0.8);
+    expect(byId.get(jax.id)).toBe(0); // clamped
+  });
+
+  it("preserves stored talkativeness across a soft leave and re-admission", async () => {
+    const { jax, room } = await twoCharacterRoom(engine);
+    await engine.setRoomTalkativeness(room.conversation.id, jax.id, 0.8);
+    await engine.removeRoomParticipant(room.conversation.id, jax.id);
+    const rejoined = await engine.addRoomParticipant(room.conversation.id, jax.id);
+    const p = rejoined.participants.find((x) => x.character.id === jax.id)!;
+    // soft leave keeps the whole row, temperament included — so whoever
+    // re-admits must explicitly write the temperament they want shown
+    // (the room-settings pane persists exactly what its form displays)
+    expect(p.talkativeness).toBe(0.8);
+  });
+
+  it("keeps a scene passed at creation and injects it into speaker turns", async () => {
+    const elara = await engine.createCharacter({ name: "Elara Vance", soul: makeSoul() });
+    const jax = await engine.createCharacter({ name: "Jax Sterling", soul: makeSoul() });
+    const room = await engine.createRoom("The Hearth", [elara.id, jax.id], "a kitchen at midnight");
+    expect(room.conversation.sceneState).toBe("a kitchen at midnight");
+
+    await engine.postUserMessage(room.conversation.id, "Evening.");
+    transport.push("Evening to you.");
+    await engine.generateCharacterTurn(room.conversation.id, elara.id, { deferMaintenance: true });
+    expect(transport.requests[0]!.messages[0]!.content).toContain("a kitchen at midnight");
+  });
+
   it("generates a speaker turn with that character's context, pinned to the app model", async () => {
     const { elara, jax, room } = await twoCharacterRoom(engine);
     await engine.postUserMessage(room.conversation.id, "Elara, how is the lamp?");

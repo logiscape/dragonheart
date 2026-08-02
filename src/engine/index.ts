@@ -406,6 +406,16 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     return this.openRoom(conversationId);
   }
 
+  /** Tune how readily a participant chimes in unprompted (0..1, 0.5 is neutral). */
+  async setRoomTalkativeness(
+    conversationId: string,
+    characterId: string,
+    talkativeness: number,
+  ): Promise<void> {
+    const t = Math.min(1, Math.max(0, talkativeness));
+    await this.repos.setParticipantTalkativeness(conversationId, characterId, t);
+  }
+
   private async loadParticipants(
     conversationId: string,
     includeLeft = false,

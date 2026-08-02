@@ -13,7 +13,6 @@ import { useAppState, useStore } from "@state/store";
 import type { Attachment, Character, Message } from "@engine/index";
 import { pickOpenPath, readBase64, mimeFromPath } from "@adapters/tauriFiles";
 import { findMentionToken, mentionMatches, applyMention, type MentionToken } from "@ui/mentions";
-import { RoomSetup } from "./RoomSetup";
 
 function Attachments({ attachments }: { attachments: Attachment[] }) {
   if (!attachments.length) return null;
@@ -32,7 +31,6 @@ export function Room() {
   const room = s.rooms.find((r) => r.id === s.currentRoomId) ?? null;
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<Attachment[]>([]);
-  const [setupOpen, setSetupOpen] = useState(false);
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -173,8 +171,8 @@ export function Room() {
           ))}
         </div>
         <div className="dh-conv__tools">
-          <Tooltip label="Invite or rearrange">
-            <IconButton label="Invite or rearrange" variant="ghost" onClick={() => setSetupOpen(true)}>
+          <Tooltip label="Tend the gathering">
+            <IconButton label="Tend the gathering" variant="ghost" onClick={() => store.toggleRoomStudio()}>
               <Icons.Plus />
             </IconButton>
           </Tooltip>
@@ -330,7 +328,6 @@ export function Room() {
         </p>
       </div>
 
-      <RoomSetup open={setupOpen} onClose={() => setSetupOpen(false)} roomId={room.id} />
     </main>
   );
 }

@@ -120,12 +120,16 @@ export function Sidebar() {
             {s.theme === "light" ? <Icons.Moon /> : <Icons.Sun />}
           </IconButton>
         </Tooltip>
-        <Tooltip label="The Studio" placement="top">
+        <Tooltip label={s.view === "room" ? "The gathering" : "The Studio"} placement="top">
           <IconButton
             label="Studio"
             variant="ghost"
             onClick={() => {
-              if (s.view === "conversation") store.toggleStudio();
+              // a room's "studio" is the gathering itself; everywhere else the
+              // panel fits the view — a character's Studio in conversation,
+              // the house-wide settings in the Hall
+              if (s.view === "room") store.toggleRoomStudio();
+              else store.toggleStudio();
             }}
           >
             <Icons.Studio />

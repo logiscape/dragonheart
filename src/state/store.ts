@@ -281,8 +281,21 @@ export class AppStore {
     this.set({ rooms: await this.engine.listRooms() });
   }
 
-  async createRoom(name: string, characterIds: string[]): Promise<void> {
-    const room = await this.engine.createRoom(name.trim() || "The gathering", characterIds);
+  async createRoom(
+    name: string,
+    characterIds: string[],
+    opts: { scene?: string | null; talkativeness?: Record<string, number> } = {},
+  ): Promise<void> {
+    let room = await this.engine.createRoom(
+      name.trim() || "The gathering",
+      characterIds,
+      opts.scene?.trim() || null,
+    );
+    const tuned = Object.entries(opts.talkativeness ?? {}).filter(([, t]) => t !== 0.5);
+    for (const [id, t] of tuned) {
+      await this.engine.setRoomTalkativeness(room.conversation.id, id, t);
+    }
+    if (tuned.length) room = await this.engine.openRoom(room.conversation.id);
     await this.loadRooms();
     this.enterRoom(room);
   }
@@ -299,6 +312,14 @@ export class AppStore {
       currentRoomId: room.conversation.id,
       currentCharacterId: null,
       relationship: null,
+      // drop any lingering 1:1 thread — a Studio opened from the room must
+      // never show (or delete) another conversation's scene
+      conversation: null,
+      messages: [],
+      streaming: false,
+      streamingText: "",
+      thinkingText: "",
+      lastRecall: [],
       studioOpen: false,
       roomParticipants: room.participants,
       roomMessages: room.messages,
@@ -361,25 +382,43 @@ export class AppStore {
     }
   }
 
-  async updateRoomParticipants(roomId: string, characterIds: string[]): Promise<void> {
+  /** Apply everything the room-settings dialog can change in one pass. */
+  async applyRoomSetup(
+    roomId: string,
+    opts: {
+      name: string;
+      scene: string | null;
+      characterIds: string[];
+      talkativeness: Record<string, number>;
+    },
+  ): Promise<void> {
     const current = await this.engine.openRoom(roomId);
+    const title = opts.name.trim() || current.conversation.title;
+    const scene = opts.scene?.trim() || null;
+    if (title !== current.conversation.title || scene !== current.conversation.sceneState) {
+      await this.engine.updateConversation({ ...current.conversation, title, sceneState: scene });
+    }
     const present = new Set(current.participants.map((p) => p.character.id));
-    const wanted = new Set(characterIds);
-    for (const id of characterIds) {
+    const wanted = new Set(opts.characterIds);
+    for (const id of opts.characterIds) {
       if (!present.has(id)) await this.engine.addRoomParticipant(roomId, id);
     }
     for (const id of present) {
       if (!wanted.has(id)) await this.engine.removeRoomParticipant(roomId, id);
     }
+    const known = new Map(current.participants.map((p) => [p.character.id, p.talkativeness]));
+    for (const id of opts.characterIds) {
+      // what the form showed is what gets saved: absent from the record means
+      // it displayed neutral. A re-admitted character isn't in `known` (soft
+      // leave preserves their old row, and re-admission revives it untouched),
+      // so anyone not present before this apply is written unconditionally —
+      // never silently revived with a hidden temperament.
+      const t = opts.talkativeness[id] ?? 0.5;
+      if ((known.get(id) ?? null) !== t) await this.engine.setRoomTalkativeness(roomId, id, t);
+    }
     await this.loadRooms();
-    // restart the session against the new roster
+    // restart the session against the new roster and temperaments
     if (this.state.currentRoomId === roomId) await this.openRoom(roomId);
-  }
-
-  async renameRoom(roomId: string, name: string): Promise<void> {
-    const room = await this.engine.openRoom(roomId);
-    await this.engine.updateConversation({ ...room.conversation, title: name.trim() || room.conversation.title });
-    await this.loadRooms();
   }
 
   async deleteRoom(roomId: string): Promise<void> {
@@ -402,6 +441,12 @@ export class AppStore {
 
   toggleStudio(): void {
     this.set({ studioOpen: !this.state.studioOpen });
+  }
+  /** Show (or hide) the room's own studio pane. Clearing the character makes
+   *  the room view render RoomStudio instead of a participant's Studio. */
+  toggleRoomStudio(): void {
+    const showing = this.state.studioOpen && this.state.currentCharacterId === null;
+    this.set({ currentCharacterId: null, relationship: null, studioOpen: !showing });
   }
   setStudioOpen(v: boolean): void {
     this.set({ studioOpen: v });
