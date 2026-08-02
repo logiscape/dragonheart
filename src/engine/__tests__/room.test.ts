@@ -127,6 +127,29 @@ describe.skipIf(!hasNodeSqlite())("engine rooms", () => {
     expect(req.messages[0]!.content).toContain("You are Jax Sterling and only Jax Sterling.");
   });
 
+  it("cuts a first-name speaker bleed out of both the stream and the saved message", async () => {
+    const { elara, room } = await twoCharacterRoom(engine);
+    await engine.postUserMessage(room.conversation.id, "Hi friends!");
+    // the model drifts into Jax's voice, with the label split across chunks
+    transport.pushChunks(() => [
+      { message: { role: "assistant", content: "The light in here is lovely." }, done: false },
+      { message: { role: "assistant", content: "\n\nJa" }, done: false },
+      { message: { role: "assistant", content: "x: Elara! The wings!" }, done: false },
+      { message: { role: "assistant", content: " More stolen words." }, done: false },
+      { done: true, done_reason: "stop" },
+    ]);
+
+    let streamed = "";
+    const res = await engine.generateCharacterTurn(room.conversation.id, elara.id, {
+      onToken: (_d, full) => (streamed = full),
+      deferMaintenance: true,
+    });
+
+    expect(res.message.content).toBe("The light in here is lovely.");
+    expect(streamed).not.toContain("Jax");
+    expect(streamed).not.toContain("stolen");
+  });
+
   it("throws TurnAbortedError on cancel and persists nothing", async () => {
     const { elara, room } = await twoCharacterRoom(engine);
     await engine.postUserMessage(room.conversation.id, "Anyone?");

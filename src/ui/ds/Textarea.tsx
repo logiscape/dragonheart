@@ -36,18 +36,13 @@ export interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextArea
   maxRows?: number;
 }
 
-export function Textarea({
-  label = null,
-  seamless = false,
-  autoGrow = false,
-  maxRows = 3,
-  id,
-  className = "",
-  value,
-  ...rest
-}: TextareaProps) {
+export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(function Textarea(
+  { label = null, seamless = false, autoGrow = false, maxRows = 3, id, className = "", value, ...rest },
+  forwarded,
+) {
   const fieldId = id || (label ? `dh-${label.replace(/\s+/g, "-").toLowerCase()}` : undefined);
   const ref = React.useRef<HTMLTextAreaElement>(null);
+  React.useImperativeHandle(forwarded, () => ref.current!, []);
 
   React.useLayoutEffect(() => {
     if (!autoGrow) return;
@@ -83,4 +78,4 @@ export function Textarea({
       {ta}
     </div>
   );
-}
+});

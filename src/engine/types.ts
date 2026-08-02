@@ -335,6 +335,8 @@ export interface OllamaOptions {
   temperature?: number;
   top_k?: number;
   top_p?: number;
+  repeat_penalty?: number;
+  repeat_last_n?: number;
   stop?: string[];
   [k: string]: unknown;
 }

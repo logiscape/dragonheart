@@ -18,6 +18,8 @@ export interface RosterEntry {
   name: string;
   epithet?: string;
   blurb?: string;
+  /** 0..1 inclination to speak; 0.5 is neutral. Absent → neutral. */
+  talkativeness?: number;
 }
 
 /** One rendered line of recent room history, oldest → newest. */
@@ -32,8 +34,10 @@ export interface RoomJudge {
   firstSpeaker(userText: string, transcript: TranscriptLine[]): Promise<string | null>;
   /** whether anyone else chimes in; null = the moment is complete */
   followUpSpeaker(transcript: TranscriptLine[], excludeId: string): Promise<string | null>;
-  /** who breaks a long silence; null → caller falls back */
-  idleSpeaker(transcript: TranscriptLine[]): Promise<string | null>;
+  /** who breaks a long silence; null → caller falls back. The last speaker
+   *  stays eligible — sometimes pressing the moment further is the natural
+   *  thing — but the judge is told who it was so someone else can stir. */
+  idleSpeaker(transcript: TranscriptLine[], lastSpeakerId?: string | null): Promise<string | null>;
 }
 
 // ---------------------------------------------------------------
@@ -42,27 +46,40 @@ export interface RoomJudge {
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Whether the sentence continuing at `from` ends in a question mark. */
+function sentenceAsksQuestion(text: string, from: number): boolean {
+  const m = /[.!?…？！。\n]/.exec(text.slice(from));
+  return m !== null && (m[0] === "?" || m[0] === "？");
+}
+
 /**
  * Find every participant addressed by name (`Elara`, `Elara Vance`, `@Elara`)
- * in the user's message, ordered by where they were mentioned — "Jax and
- * Elara, what do you both think?" names both, Jax first. All of them answer,
- * in that order.
+ * in the user's message. Whoever was asked a question answers first — "Don't
+ * worry Elara! Jax, want a drink?" mentions Elara earlier, but the drink
+ * question is Jax's to answer. Within each group, mention order holds —
+ * "Jax and Elara, what do you both think?" names both in one question, Jax
+ * first. All of them answer, in that order.
  */
 export function findMentionedSpeakers(text: string, roster: RosterEntry[]): string[] {
-  const hits: Array<{ id: string; index: number }> = [];
+  const hits: Array<{ id: string; index: number; asked: boolean }> = [];
   for (const entry of roster) {
     const full = entry.name.trim();
     const first = full.split(/\s+/)[0] ?? "";
     let bestIndex = Infinity;
+    let asked = false;
     for (const name of [full, first]) {
       if (!name) continue;
-      const re = new RegExp(`(?:^|[^\\p{L}\\p{N}])@?${esc(name)}(?![\\p{L}\\p{N}])`, "iu");
-      const m = re.exec(text);
-      if (m && m.index < bestIndex) bestIndex = m.index;
+      const re = new RegExp(`(?:^|[^\\p{L}\\p{N}])@?${esc(name)}(?![\\p{L}\\p{N}])`, "igu");
+      for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+        if (m.index < bestIndex) bestIndex = m.index;
+        if (sentenceAsksQuestion(text, m.index + m[0].length)) asked = true;
+      }
     }
-    if (bestIndex < Infinity) hits.push({ id: entry.id, index: bestIndex });
+    if (bestIndex < Infinity) hits.push({ id: entry.id, index: bestIndex, asked });
   }
-  return hits.sort((a, b) => a.index - b.index).map((h) => h.id);
+  return hits
+    .sort((a, b) => Number(b.asked) - Number(a.asked) || a.index - b.index)
+    .map((h) => h.id);
 }
 
 /** The earliest-mentioned participant, if any. */
@@ -111,8 +128,19 @@ export function renderJudgeTranscript(transcript: TranscriptLine[]): string {
     .join("\n");
 }
 
+/** A temperament tag for the judge when talkativeness deviates from neutral. */
+function temperament(t: number | undefined): string {
+  if (t == null) return "";
+  if (t <= 0.35) return " (usually quiet — speaks when it matters)";
+  if (t >= 0.65) return " (talkative — quick to jump in)";
+  return "";
+}
+
 export function buildJudgeSystem(roster: RosterEntry[], userName: string): string {
-  const lines = roster.map((r) => `- ${r.name}${r.epithet ? ` — ${r.epithet}` : r.blurb ? ` — ${r.blurb}` : ""}`);
+  const lines = roster.map(
+    (r) =>
+      `- ${r.name}${r.epithet ? ` — ${r.epithet}` : r.blurb ? ` — ${r.blurb}` : ""}${temperament(r.talkativeness)}`,
+  );
   return `You are the silent director of a scene between friends. Present, besides ${userName} (the human):
 ${lines.join("\n")}
 Read the recent conversation and answer with JSON only: {"speaker":"<name>"}.`;
@@ -193,13 +221,13 @@ export function createOllamaRoomJudge(client: OllamaClient, opts: OllamaJudgeOpt
         [...names, NOBODY],
       );
     },
-    idleSpeaker(transcript) {
+    idleSpeaker(transcript, lastSpeakerId) {
       const names = shuffled(opts.roster.map((r) => r.name));
-      return ask(
-        `The room has been quiet for a while. Who would naturally break the silence?`,
-        transcript,
-        names,
-      );
+      const last = lastSpeakerId ? opts.roster.find((r) => r.id === lastSpeakerId) : undefined;
+      const question = last
+        ? `The room has been quiet for a while. ${last.name} spoke last — they might press the moment further, or someone else might stir. Who would naturally break the silence?`
+        : `The room has been quiet for a while. Who would naturally break the silence?`;
+      return ask(question, transcript, names);
     },
   };
 }

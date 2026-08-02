@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { assembleContext, resolveRoomModel, sanitizeGroupReply, type AssembleInput } from "../context";
+import {
+  assembleContext,
+  resolveRoomModel,
+  sanitizeGroupReply,
+  GroupReplyStreamGuard,
+  type AssembleInput,
+} from "../context";
 import { DEFAULT_SETTINGS } from "../types";
 import {
   makeCharacter,
@@ -105,6 +111,18 @@ describe("group context assembly", () => {
     expect(merged.images).toEqual(["abc123"]);
   });
 
+  it("dampens repetition and asks for short turns only in rooms", () => {
+    const { request } = assembleContext(groupInput());
+    expect(request.options?.repeat_penalty).toBe(1.15);
+    expect(request.options?.repeat_last_n).toBe(256);
+    expect(request.messages[0]!.content).toContain("a few sentences");
+
+    const direct = assembleContext(groupInput({ group: undefined }));
+    expect(direct.request.options?.repeat_penalty).toBeUndefined();
+    expect(direct.request.options?.repeat_last_n).toBeUndefined();
+    expect(direct.request.messages[0]!.content).not.toContain("a few sentences");
+  });
+
   it("drops the oldest rendered lines first under budget pressure", () => {
     const verbatim = Array.from({ length: 40 }, (_, i) =>
       makeMessage({
@@ -144,6 +162,84 @@ describe("sanitizeGroupReply", () => {
   it("leaves plain replies untouched and never cuts mid-line mentions", () => {
     const raw = "I told Jax Sterling: he should rest. He laughed.";
     expect(sanitizeGroupReply(raw, "Elara Vance", others)).toBe(raw);
+  });
+
+  it("strips a leading first-name self-label", () => {
+    expect(sanitizeGroupReply("Elara: The lamp is lit.", "Elara Vance", others)).toBe(
+      "The lamp is lit.",
+    );
+  });
+
+  it("truncates at a first-name foreign label — the bleed the model actually produces", () => {
+    const raw =
+      "The lighting in here is really nice right now.\n\nJax: Elara! Tell me you saw the sketch.";
+    expect(sanitizeGroupReply(raw, "Elara Vance", others)).toBe(
+      "The lighting in here is really nice right now.",
+    );
+  });
+
+  it("a first name shared with the speaker never cuts the speaker's own reply", () => {
+    const raw = "Fine.\nElara: and one more thing.";
+    expect(sanitizeGroupReply(raw, "Elara Vance", ["Elara Smith"])).toBe(raw);
+  });
+
+  it("does not let a first-name variant swallow a longer name", () => {
+    const raw = "Quiet night.\nJaxon: is that so?";
+    // "Jax" must not match inside "Jaxon" — only an exact label cuts
+    expect(sanitizeGroupReply(raw, "Elara Vance", ["Jax Sterling"])).toBe(raw);
+  });
+});
+
+describe("GroupReplyStreamGuard", () => {
+  const feed = (guard: GroupReplyStreamGuard, deltas: string[]) => {
+    let out = "";
+    for (const d of deltas) out += guard.push(d);
+    return out;
+  };
+
+  it("passes ordinary text through as it streams, including mid-line mentions", () => {
+    const g = new GroupReplyStreamGuard("Elara Vance", ["Jax Sterling", "Robin"]);
+    const out = feed(g, ["The lamp ", "is lit, ", "Jax — come ", "see."]);
+    expect(out + g.flush()).toBe("The lamp is lit, Jax — come see.");
+    expect(g.cut).toBe(false);
+  });
+
+  it("cuts at a first-name label split across deltas and never releases it", () => {
+    const g = new GroupReplyStreamGuard("Elara Vance", ["Jax Sterling", "Robin"]);
+    const out = feed(g, ["Soft amber light.", "\n\nJa", "x: Elara! The wings!"]);
+    expect(g.cut).toBe(true);
+    expect((out + g.flush()).trim()).toBe("Soft amber light.");
+    expect(out).not.toContain("Jax");
+  });
+
+  it("cuts a foreign label at the very start of the reply", () => {
+    const g = new GroupReplyStreamGuard("Elara Vance", ["Jax Sterling"]);
+    expect(g.push("Jax: mine now.")).toBe("");
+    expect(g.cut).toBe(true);
+  });
+
+  it("holds a possible label prefix and releases it once it turns out benign", () => {
+    const g = new GroupReplyStreamGuard("Elara Vance", ["Jax Sterling"]);
+    let out = g.push("One.\nJax");
+    expect(out).toBe("One.\n"); // "Jax" withheld — could still become "Jax:"
+    out += g.push(" and I argued about it.");
+    expect(out).toBe("One.\nJax and I argued about it.");
+    expect(g.cut).toBe(false);
+  });
+
+  it("flush releases a held tail at stream end", () => {
+    const g = new GroupReplyStreamGuard("Elara Vance", ["Jax Sterling"]);
+    const out = feed(g, ["See you tomorrow.\n", "Jax"]);
+    expect(out).toBe("See you tomorrow.\n");
+    expect(g.flush()).toBe("Jax");
+  });
+
+  it("ignores everything after a cut", () => {
+    const g = new GroupReplyStreamGuard("Elara Vance", ["Robin"]);
+    feed(g, ["Done.\n", "Robin: my line."]);
+    expect(g.cut).toBe(true);
+    expect(g.push(" More stolen words.")).toBe("");
+    expect(g.flush()).toBe("");
   });
 });
 

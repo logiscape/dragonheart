@@ -44,10 +44,15 @@ function scriptedJudge(script: {
   };
 }
 
-function harness(judge: RoomJudge, rngValues: number[], cfg: CascadeConfig = CFG) {
+function harness(
+  judge: RoomJudge,
+  rngValues: number[],
+  cfg: CascadeConfig = CFG,
+  roster: RosterEntry[] = ROSTER,
+) {
   const effects: OrchestratorEffect[] = [];
   const rng = () => (rngValues.length > 1 ? rngValues.shift()! : rngValues[0] ?? 0.5);
-  const orch = new RoomOrchestrator(judge, ROSTER, cfg, rng, (fx) => effects.push(fx));
+  const orch = new RoomOrchestrator(judge, roster, cfg, rng, (fx) => effects.push(fx));
   const startTurns = () =>
     effects.filter((e): e is Extract<OrchestratorEffect, { type: "startTurn" }> => e.type === "startTurn");
   return { orch, effects, startTurns };
@@ -161,6 +166,50 @@ describe("RoomOrchestrator", () => {
     expect(effects.some((e) => e.type === "armIdle")).toBe(true);
   });
 
+  it("a talkative participant raises the follow-up chance", async () => {
+    const chatty: RosterEntry[] = [
+      { id: "elara", name: "Elara Vance", talkativeness: 0.1 },
+      { id: "jax", name: "Jax Sterling", talkativeness: 1.0 },
+    ];
+    // Jax at 1.0 doubles the base: p = min(0.95, 0.6 × 2) — a 0.9 roll now passes
+    const judge = scriptedJudge({ first: ["elara"], follow: ["jax"] });
+    const { orch, startTurns } = harness(judge, [0.5, 0.9, 0.5], CFG, chatty);
+    await orch.handle({ type: "USER_POSTED", content: "evening" }, CTX);
+    await orch.handle({ type: "TURN_DONE", epoch: startTurns()[0]!.epoch, speakerId: "elara" }, CTX);
+    expect(startTurns().map((t) => t.speakerId)).toEqual(["elara", "jax"]);
+  });
+
+  it("a room of quiet participants follows up rarely", async () => {
+    const quiet: RosterEntry[] = [
+      { id: "elara", name: "Elara Vance", talkativeness: 0.1 },
+      { id: "jax", name: "Jax Sterling", talkativeness: 0.1 },
+    ];
+    // p = 0.6 × (0.1 / 0.5) = 0.12 — a 0.3 roll that used to pass now fails
+    const judge = scriptedJudge({ first: ["elara"] });
+    const { orch, startTurns } = harness(judge, [0.5, 0.3], CFG, quiet);
+    await orch.handle({ type: "USER_POSTED", content: "evening" }, CTX);
+    await orch.handle({ type: "TURN_DONE", epoch: startTurns()[0]!.epoch, speakerId: "elara" }, CTX);
+    expect(startTurns()).toHaveLength(1);
+    expect(orch.getPhase()).toBe("idle");
+  });
+
+  it("judge-failure fallbacks weight the pick by talkativeness", async () => {
+    const skewed: RosterEntry[] = [
+      { id: "elara", name: "Elara Vance", talkativeness: 0 },
+      { id: "jax", name: "Jax Sterling", talkativeness: 0.8 },
+    ];
+    const failing: RoomJudge = {
+      firstSpeaker: async () => null,
+      followUpSpeaker: async () => null,
+      idleSpeaker: async () => null,
+    };
+    const { orch, startTurns } = harness(failing, [0.4], CFG, skewed);
+    orch.start();
+    await orch.handle({ type: "IDLE_FIRED" }, CTX);
+    // weights [0, 0.8]: every roll lands on Jax
+    expect(startTurns()[0]!.speakerId).toBe("jax");
+  });
+
   it("judge 'nobody' vetoes a passing roll", async () => {
     const judge = scriptedJudge({ first: ["elara"], follow: [null] });
     const { orch, startTurns, effects } = harness(judge, [0.9, 0.1, 0.9]);
@@ -216,6 +265,41 @@ describe("RoomOrchestrator", () => {
     expect(startTurns()[0]!.speakerId).toBe("jax");
     await orch.handle({ type: "TURN_DONE", epoch: startTurns()[0]!.epoch, speakerId: "jax" }, CTX);
     expect(orch.getPhase()).toBe("idle"); // veto → back to idle, timer re-armed
+  });
+
+  it("idle stir tells the judge who spoke last", async () => {
+    let seenLast: string | null | undefined;
+    const judge: RoomJudge = {
+      firstSpeaker: async () => "elara",
+      followUpSpeaker: async () => null,
+      idleSpeaker: async (_t, last) => {
+        seenLast = last;
+        return "jax";
+      },
+    };
+    const { orch, startTurns } = harness(judge, [0.9, 0.9]);
+    await orch.handle({ type: "USER_POSTED", content: "evening" }, CTX);
+    await orch.handle({ type: "TURN_DONE", epoch: startTurns()[0]!.epoch, speakerId: "elara" }, CTX);
+    await orch.handle({ type: "IDLE_FIRED" }, CTX);
+    expect(seenLast).toBe("elara");
+    expect(startTurns().at(-1)!.speakerId).toBe("jax");
+  });
+
+  it("a reopened room's idle stir still knows who spoke last, from history", async () => {
+    let seenLast: string | null | undefined;
+    const judge: RoomJudge = {
+      firstSpeaker: async () => null,
+      followUpSpeaker: async () => null,
+      idleSpeaker: async (_t, last) => {
+        seenLast = last;
+        return "elara";
+      },
+    };
+    const { orch, startTurns } = harness(judge, [0.9]);
+    orch.start(); // fresh session over existing history — no TURN_DONE yet
+    await orch.handle({ type: "IDLE_FIRED" }, { ...CTX, lastCharacterSpeakerId: "jax" });
+    expect(seenLast).toBe("jax");
+    expect(startTurns()[0]!.speakerId).toBe("elara");
   });
 
   it("idle firing while generating is ignored", async () => {

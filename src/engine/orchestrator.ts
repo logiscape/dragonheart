@@ -77,7 +77,8 @@ export class RoomOrchestrator {
   private consecutiveCharMsgs = 0;
   private lastSpeakerId: string | null = null;
   /** characters the user explicitly addressed who haven't answered yet — they
-   *  all speak, in mention order, before the stochastic follow-ups resume */
+   *  all speak, in address order (asked-a-question first, then mention order),
+   *  before the stochastic follow-ups resume */
   private addressedQueue: string[] = [];
   private closed = false;
 
@@ -139,8 +140,9 @@ export class RoomOrchestrator {
     const ticket = ++this.ticket; // supersedes any in-flight selection or turn
     this.setPhase("selecting");
 
-    // everyone addressed by name answers, in mention order; the first speaks
-    // now, the rest are queued ahead of any stochastic follow-ups
+    // everyone addressed by name answers, in address order (whoever was asked
+    // a question goes first); the first speaks now, the rest are queued ahead
+    // of any stochastic follow-ups
     const mentioned = findMentionedSpeakers(content, this.roster);
     if (mentioned.length > 0) {
       this.addressedQueue = mentioned.slice(1);
@@ -177,11 +179,22 @@ export class RoomOrchestrator {
       return;
     }
 
-    // roll first (free), judge second (costs a prefill)
+    // roll first (free), judge second (costs a prefill). The most talkative
+    // of the others sets the room's eagerness: 0.5 is neutral, 1.0 doubles
+    // the base chance, near-0 all but mutes the cascade.
+    const eager = Math.max(
+      0,
+      ...this.roster.filter((r) => r.id !== speakerId).map((r) => r.talkativeness ?? 0.5),
+    );
     const p =
       this.followUpCount >= this.cfg.maxFollowUps
         ? 0
-        : this.cfg.followUpBase * Math.pow(this.cfg.followUpDecay, this.followUpCount);
+        : Math.min(
+            0.95,
+            this.cfg.followUpBase *
+              Math.pow(this.cfg.followUpDecay, this.followUpCount) *
+              (eager / 0.5),
+          );
     if (this.rng() >= p) {
       this.setPhase("idle");
       this.armIdle();
@@ -206,9 +219,15 @@ export class RoomOrchestrator {
     if (this.phase !== "idle") return;
     const ticket = ++this.ticket;
     this.setPhase("selecting");
-    let speakerId = await this.safeJudge(() => this.judge.idleSpeaker(ctx.transcript));
+    // a reopened session hasn't seen a TURN_DONE yet — fall back to the
+    // last speaker the session read out of the persisted history
+    const lastSpeakerId = this.lastSpeakerId ?? ctx.lastCharacterSpeakerId;
+    let speakerId = await this.safeJudge(() =>
+      this.judge.idleSpeaker(ctx.transcript, lastSpeakerId),
+    );
     if (this.stale(ticket)) return;
-    if (!speakerId) speakerId = this.fallbackSpeaker();
+    // weighted fallback: a stir shouldn't default back to whoever spoke last
+    if (!speakerId) speakerId = this.weightedSpeaker();
     if (!speakerId) {
       this.setPhase("idle");
       this.armIdle();
@@ -241,8 +260,21 @@ export class RoomOrchestrator {
     if (this.lastSpeakerId && this.roster.some((r) => r.id === this.lastSpeakerId)) {
       return this.lastSpeakerId;
     }
+    return this.weightedSpeaker();
+  }
+
+  /** Talkativeness-weighted random pick; uniform when the weights vanish. */
+  private weightedSpeaker(): string | null {
     if (this.roster.length === 0) return null;
-    return this.roster[Math.floor(this.rng() * this.roster.length)]!.id;
+    const weights = this.roster.map((r) => Math.max(0, r.talkativeness ?? 0.5));
+    const total = weights.reduce((a, b) => a + b, 0);
+    if (total <= 0) return this.roster[Math.floor(this.rng() * this.roster.length)]!.id;
+    let roll = this.rng() * total;
+    for (let i = 0; i < this.roster.length; i++) {
+      roll -= weights[i]!;
+      if (roll < 0) return this.roster[i]!.id;
+    }
+    return this.roster[this.roster.length - 1]!.id;
   }
 
   private async safeJudge(fn: () => Promise<string | null>): Promise<string | null> {

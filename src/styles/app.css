@@ -145,7 +145,7 @@ body {
 }
 .dh-composer:focus-within { border-color: var(--accent-line); box-shadow: var(--shadow-md), var(--glow-ember-sm); }
 .dh-composer > svg { width: 20px; height: 20px; color: var(--text-faint); margin-bottom: 9px; flex: none; }
-.dh-composer__field { flex: 1; }
+.dh-composer__field { flex: 1; position: relative; }
 .dh-composer textarea { padding: 7px 0 !important; color: var(--text-primary); }
 .dh-composer__attach { margin-bottom: 1px; }
 .dh-composer__hint { text-align: center; font-size: 12px; color: var(--text-faint); margin: 10px auto 0; max-width: 680px; }
@@ -155,6 +155,26 @@ body {
 .dh-composer__thumb button {
   position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 999px;
   border: none; background: var(--surface-scrim); color: var(--parch-50); cursor: pointer; font-size: 12px; line-height: 1;
+}
+
+/* @-mention picker — floats above the composer while a token is being typed */
+.dh-mention-pop {
+  position: absolute; left: -8px; right: -8px; bottom: calc(100% + 16px);
+  background: var(--surface-card); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  padding: 6px; z-index: 20;
+}
+.dh-mention-pop__item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 7px 10px; border: none; border-radius: var(--radius-md);
+  background: transparent; color: var(--text-primary); cursor: pointer;
+  font-family: var(--font-sans); font-size: 14px; text-align: left;
+}
+.dh-mention-pop__item.is-active { background: var(--surface-inset); }
+.dh-mention-pop__name { font-weight: var(--weight-semibold); }
+.dh-mention-pop__epithet {
+  color: var(--text-faint); font-size: 12px; margin-left: auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dh-msg__attachments { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .dh-msg__attachments img { max-width: 220px; max-height: 220px; border-radius: var(--radius-md); border: 1px solid var(--border-soft); }

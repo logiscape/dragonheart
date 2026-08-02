@@ -12,7 +12,13 @@ import { systemClock } from "./ports";
 import { initSchema } from "./db/schema";
 import { Repos } from "./db/repositories";
 import { OllamaClient } from "./ollama";
-import { assembleContext, resolveModel, resolveRoomModel, sanitizeGroupReply } from "./context";
+import {
+  assembleContext,
+  resolveModel,
+  resolveRoomModel,
+  sanitizeGroupReply,
+  GroupReplyStreamGuard,
+} from "./context";
 import { triggerLore } from "./lorebook";
 import {
   rankMemoriesForRecall,
@@ -67,7 +73,7 @@ export type {
   RoomPhase,
 } from "./orchestrator";
 export type { RoomJudge, RosterEntry, TranscriptLine } from "./roomJudge";
-export { sanitizeGroupReply } from "./context";
+export { sanitizeGroupReply, GroupReplyStreamGuard } from "./context";
 
 export interface ConversationView {
   relationship: Relationship;
@@ -516,17 +522,42 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     });
 
     if (opts.signal?.aborted) throw new TurnAbortedError();
-    const result = await this.ollama.chat(
-      assembled.request,
-      opts.onToken,
-      opts.signal ? { signal: opts.signal } : undefined,
-    );
-    if (opts.signal?.aborted || result.doneReason === "cancel") throw new TurnAbortedError();
-
     const otherNames = [
       this.user.displayName,
       ...participants.filter((p) => p.character.id !== characterId).map((p) => p.character.name),
     ];
+
+    // stream through the guard: the UI never sees a foreign speaker label, and
+    // generation is cancelled as soon as the reply crosses into another voice
+    const guard = new GroupReplyStreamGuard(character.name, otherNames);
+    const abort = new AbortController();
+    if (opts.signal) {
+      if (opts.signal.aborted) abort.abort();
+      else opts.signal.addEventListener("abort", () => abort.abort(), { once: true });
+    }
+    let shown = "";
+    const result = await this.ollama.chat(
+      assembled.request,
+      (delta) => {
+        const safe = guard.push(delta);
+        if (guard.cut && !abort.signal.aborted) abort.abort();
+        if (safe) {
+          shown += safe;
+          opts.onToken?.(safe, shown);
+        }
+      },
+      { signal: abort.signal },
+    );
+    const tail = guard.flush();
+    if (tail) {
+      shown += tail;
+      opts.onToken?.(tail, shown);
+    }
+    // a cancel we triggered ourselves (guard.cut) is a completed turn, not an abort
+    if (opts.signal?.aborted || (result.doneReason === "cancel" && !guard.cut)) {
+      throw new TurnAbortedError();
+    }
+
     const replyText = sanitizeGroupReply(result.content, character.name, otherNames) || "…";
     const message = await this.repos.addMessage({
       conversationId,

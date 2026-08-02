@@ -82,6 +82,7 @@ export class RoomSession {
       name: p.character.name,
       epithet: p.character.epithet,
       blurb: p.character.blurb,
+      talkativeness: p.talkativeness,
     }));
     const judge = deps.engine.createRoomJudge(this.roster, deps.rng);
     this.orchestrator = new RoomOrchestrator(judge, this.roster, cfg, deps.rng, (fx) =>

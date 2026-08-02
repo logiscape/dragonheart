@@ -50,6 +50,29 @@ describe("findMentionedSpeaker", () => {
     // each participant appears once even when named twice
     expect(findMentionedSpeakers("Jax? Jax Sterling, wake up!", ROSTER)).toEqual(["char-jax"]);
   });
+
+  it("puts the character who was asked a question ahead of an earlier plain mention", () => {
+    expect(
+      findMentionedSpeakers(
+        "Don't worry Elara, there will be plenty of garlic! Oh Jax, do you want anything to drink?",
+        ROSTER,
+      ),
+    ).toEqual(["char-jax", "char-elara"]);
+  });
+
+  it("a later mention inside a question still counts as being asked", () => {
+    expect(findMentionedSpeakers("Jax is fine. Elara, relax. Elara, tea?", ROSTER)).toEqual([
+      "char-elara",
+      "char-jax",
+    ]);
+  });
+
+  it("keeps mention order when everyone shares the same question", () => {
+    expect(findMentionedSpeakers("Jax and Elara, what do you both think?", ROSTER)).toEqual([
+      "char-jax",
+      "char-elara",
+    ]);
+  });
 });
 
 describe("isDirectReply", () => {
@@ -81,6 +104,18 @@ describe("judge prompt builders", () => {
     expect(sys).toContain("Elara Vance — Keeper of the lighthouse");
     expect(sys).toContain("Robin (the human)");
   });
+  it("labels quiet and talkative participants; neutral ones stay untagged", () => {
+    const roster: RosterEntry[] = [
+      { id: "a", name: "Mira Chen", talkativeness: 0.2 },
+      { id: "b", name: "Leo Aris", talkativeness: 0.9 },
+      { id: "c", name: "Silas Thorne", talkativeness: 0.5 },
+    ];
+    const sys = buildJudgeSystem(roster, "Robin");
+    expect(sys).toContain("Mira Chen (usually quiet");
+    expect(sys).toContain("Leo Aris (talkative");
+    expect(sys).not.toContain("Silas Thorne (");
+  });
+
   it("transcript is capped to the last 8 lines and long lines truncated", () => {
     const lines = Array.from({ length: 12 }, (_, i) => ({
       speaker: "Robin",
@@ -136,6 +171,17 @@ describe("createOllamaRoomJudge", () => {
     const options = ((requests[0]!.format as any).properties.speaker.enum as string[]);
     expect(options).not.toContain("Elara Vance");
     expect(options).toContain("nobody");
+  });
+
+  it("idle stir names the last speaker without excluding them", async () => {
+    const { judge, requests } = judgeWith('{"speaker":"Jax Sterling"}');
+    const id = await judge.idleSpeaker([], "char-elara");
+    expect(id).toBe("char-jax");
+    const req = requests[0]!;
+    expect(req.messages[1]!.content).toContain("Elara Vance spoke last");
+    const options = (req.format as any).properties.speaker.enum as string[];
+    // pressing on can be natural — the last speaker stays a valid pick
+    expect(options).toContain("Elara Vance");
   });
 
   it("returns null on garbage or transport failure", async () => {

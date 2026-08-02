@@ -8,7 +8,9 @@
     "src/engine/__tests__/**/*.ts",
     "src/engine/**/*.ts",
     "src/state/__tests__/**/*.ts",
-    "src/state/roomSession.ts"
+    "src/state/roomSession.ts",
+    "src/ui/__tests__/**/*.ts",
+    "src/ui/mentions.ts"
   ],
   "exclude": []
 }

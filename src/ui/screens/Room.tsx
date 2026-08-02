@@ -12,6 +12,7 @@ import {
 import { useAppState, useStore } from "@state/store";
 import type { Attachment, Character, Message } from "@engine/index";
 import { pickOpenPath, readBase64, mimeFromPath } from "@adapters/tauriFiles";
+import { findMentionToken, mentionMatches, applyMention, type MentionToken } from "@ui/mentions";
 import { RoomSetup } from "./RoomSetup";
 
 function Attachments({ attachments }: { attachments: Attachment[] }) {
@@ -32,11 +33,17 @@ export function Room() {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<Attachment[]>([]);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [mention, setMention] = useState<MentionToken | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const draftRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [s.roomMessages, s.roomStreamingText, s.roomPhase]);
+
+  const mentionQuery = mention?.query;
+  useEffect(() => setMentionIndex(0), [mentionQuery]);
 
   if (!room) return <main className="dh-conv" />;
 
@@ -56,10 +63,33 @@ export function Room() {
     const text = draft.trim();
     if (!text && pending.length === 0) return;
     setDraft("");
+    setMention(null);
     const atts = pending;
     setPending([]);
     // the room composer is never locked — posting mid-cascade is designed
     void store.sendRoomMessage(text, atts);
+  };
+
+  const mentionCandidates = mention
+    ? s.roomParticipants.filter((p) => mentionMatches(mention.query, p.character.name))
+    : [];
+  const activeMention = mentionCandidates.length ? mentionIndex % mentionCandidates.length : 0;
+
+  const refreshMention = (el: HTMLTextAreaElement) => {
+    setMention(findMentionToken(el.value, el.selectionStart ?? el.value.length));
+  };
+
+  const pickMention = (name: string) => {
+    if (!mention) return;
+    const el = draftRef.current;
+    const caret = el?.selectionStart ?? draft.length;
+    const next = applyMention(draft, caret, mention, name);
+    setDraft(next.text);
+    setMention(null);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(next.caret, next.caret);
+    });
   };
 
   const attachImage = async () => {
@@ -212,15 +242,71 @@ export function Room() {
         <div className="dh-composer">
           <Icons.Quill />
           <div className="dh-composer__field">
+            {mention && mentionCandidates.length > 0 ? (
+              <div className="dh-mention-pop" role="listbox" aria-label="Call on someone">
+                {mentionCandidates.map((p, i) => (
+                  <button
+                    key={p.character.id}
+                    type="button"
+                    role="option"
+                    aria-selected={i === activeMention}
+                    className={`dh-mention-pop__item${i === activeMention ? " is-active" : ""}`}
+                    onMouseDown={(e) => {
+                      // mousedown, not click, so the textarea never loses focus
+                      e.preventDefault();
+                      pickMention(p.character.name);
+                    }}
+                    onMouseEnter={() => setMentionIndex(i)}
+                  >
+                    <Avatar
+                      src={p.character.avatarPath}
+                      name={p.character.name}
+                      size="xs"
+                      mood={p.character.mood}
+                    />
+                    <span className="dh-mention-pop__name">{p.character.name}</span>
+                    {p.character.epithet ? (
+                      <span className="dh-mention-pop__epithet">{p.character.epithet}</span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <Textarea
+              ref={draftRef}
               seamless
               autoGrow
               maxRows={3}
               rows={1}
               placeholder="Say something to the room…"
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                refreshMention(e.target);
+              }}
+              onSelect={(e) => refreshMention(e.currentTarget)}
+              onBlur={() => setMention(null)}
               onKeyDown={(e) => {
+                if (mention && mentionCandidates.length > 0) {
+                  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    const delta = e.key === "ArrowDown" ? 1 : -1;
+                    setMentionIndex(
+                      (activeMention + delta + mentionCandidates.length) % mentionCandidates.length,
+                    );
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    pickMention(mentionCandidates[activeMention]!.character.name);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setMention(null);
+                    return;
+                  }
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   send();
@@ -240,7 +326,7 @@ export function Room() {
           </IconButton>
         </div>
         <p className="dh-composer__hint">
-          They'll talk among themselves if you let them. Press Enter to speak.
+          They'll talk among themselves if you let them. Press Enter to speak, @ to call on someone.
         </p>
       </div>
 

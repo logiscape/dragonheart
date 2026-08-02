@@ -184,6 +184,7 @@ function buildSystem(input: AssembleInput): string {
       ...others.map((p) => `- ${p.name}${p.epithet ? ` — ${p.epithet}` : p.blurb ? ` — ${p.blurb}` : ""}`),
       `In the conversation, other people's words appear as "Name: their words".`,
       `You are ${character.name} and only ${character.name}. Speak in first person, as yourself. Never write dialogue or actions for ${userName || "them"} or the others — they speak for themselves. Do not prefix your reply with your own name. It's a shared fire: you may address anyone present, react to what others said, or stay brief when the moment isn't yours.`,
+      `Friends around a table trade quick words, not speeches: keep most replies to a few sentences, and let a joke or an image go once you've used it instead of circling back to it. Leave room for the others.`,
     ];
     blocks.push(section("room", roomLines.join("\n")));
   }
@@ -262,26 +263,130 @@ function mergeRenderedLines(lines: RenderedLine[]): ChatMessage[] {
   return out;
 }
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Label spellings the model actually uses: "Elara Vance" and "Elara". */
+function labelVariants(name: string): string[] {
+  const full = name.trim();
+  if (!full) return [];
+  const first = full.split(/\s+/)[0]!;
+  return first.toLowerCase() === full.toLowerCase() ? [full] : [full, first];
+}
+
 /**
  * Strip a self-label the model copied from the transcript convention, and cut
- * the reply off where it starts speaking for someone else. Pure.
+ * the reply off where it starts speaking for someone else. Labels appear under
+ * both full names and first names — the souls refer to characters by first
+ * name, so that's what the model writes. Pure.
  */
 export function sanitizeGroupReply(
   text: string,
   selfName: string,
   otherNames: string[],
 ): string {
-  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let out = text.trim();
-  const self = esc(selfName.trim());
-  out = out.replace(new RegExp(`^\\s*\\**\\s*${self}\\s*\\**\\s*[:：]\\s*`, "i"), "");
+  const selfVariants = labelVariants(selfName);
+  if (selfVariants.length) {
+    const alt = selfVariants.map(escapeRe).join("|");
+    out = out.replace(new RegExp(`^\\s*\\**\\s*(?:${alt})\\s*\\**\\s*[:：]\\s*`, "i"), "");
+  }
+  const selfLower = new Set(selfVariants.map((v) => v.toLowerCase()));
   for (const name of otherNames) {
-    const n = name.trim();
-    if (!n) continue;
-    const m = out.match(new RegExp(`^\\s*\\**\\s*${esc(n)}\\s*\\**\\s*[:：]`, "im"));
-    if (m && m.index !== undefined) out = out.slice(0, m.index);
+    for (const variant of labelVariants(name)) {
+      // a shared first name labels the speaker as plausibly as anyone else — don't cut on it
+      if (selfLower.has(variant.toLowerCase())) continue;
+      const m = out.match(new RegExp(`^\\s*\\**\\s*${escapeRe(variant)}\\s*\\**\\s*[:：]`, "im"));
+      if (m && m.index !== undefined) out = out.slice(0, m.index);
+    }
   }
   return out.trim();
+}
+
+/**
+ * Incremental companion to sanitizeGroupReply for live streams. Text is
+ * released only once it can no longer turn into a foreign speaker label, so
+ * the UI never flashes another character's stolen line; once a label does
+ * appear, `cut` flips true and the caller can abort generation instead of
+ * paying for tokens that will be thrown away. Persistence still goes through
+ * sanitizeGroupReply on the full text.
+ */
+export class GroupReplyStreamGuard {
+  private buffer = "";
+  private atLineStart = true;
+  private cutSeen = false;
+  private readonly variants: string[];
+  private readonly labelRe: RegExp | null;
+
+  constructor(selfName: string, otherNames: string[]) {
+    const selfLower = new Set(labelVariants(selfName).map((v) => v.toLowerCase()));
+    const variants: string[] = [];
+    for (const name of otherNames) {
+      for (const v of labelVariants(name)) {
+        if (selfLower.has(v.toLowerCase())) continue;
+        if (variants.some((x) => x.toLowerCase() === v.toLowerCase())) continue;
+        variants.push(v);
+      }
+    }
+    this.variants = variants.map((v) => v.toLowerCase());
+    this.labelRe = variants.length
+      ? new RegExp(`\\n\\s*\\**\\s*(?:${variants.map(escapeRe).join("|")})\\s*\\**\\s*[:：]`, "i")
+      : null;
+  }
+
+  /** True once the reply crossed into someone else's voice. */
+  get cut(): boolean {
+    return this.cutSeen;
+  }
+
+  /** Feed a streamed delta; returns the text now safe to show (may be ""). */
+  push(delta: string): string {
+    if (this.cutSeen || !delta) return "";
+    this.buffer += delta;
+
+    // a complete foreign label at a line start ends the reply
+    if (this.labelRe) {
+      const sentinel = this.atLineStart ? "\n" : "";
+      const m = this.labelRe.exec(sentinel + this.buffer);
+      if (m) {
+        this.cutSeen = true;
+        const keep = this.buffer.slice(0, Math.max(0, m.index - sentinel.length));
+        this.buffer = "";
+        return keep;
+      }
+    }
+
+    // hold back a line-start tail that could still grow into a label
+    const ls = this.buffer.lastIndexOf("\n") + 1;
+    const tail = this.buffer.slice(ls);
+    if ((ls > 0 || this.atLineStart) && this.couldBecomeLabel(tail)) {
+      const out = this.buffer.slice(0, ls);
+      this.buffer = tail;
+      this.atLineStart = true;
+      return out;
+    }
+    const out = this.buffer;
+    this.buffer = "";
+    this.atLineStart = out.endsWith("\n");
+    return out;
+  }
+
+  /** Stream ended without a cut — release whatever was held. */
+  flush(): string {
+    const out = this.buffer;
+    this.buffer = "";
+    return out;
+  }
+
+  private couldBecomeLabel(tail: string): boolean {
+    if (!tail || !this.variants.length) return false;
+    const t = tail.replace(/^[\s*]+/, "").toLowerCase();
+    if (!t) return true; // only decoration so far — the name may follow
+    for (const v of this.variants) {
+      if (v.startsWith(t)) return true; // partial name
+      if (t.startsWith(v) && /^[\s*]*$/.test(t.slice(v.length))) return true; // colon pending
+    }
+    return false;
+  }
 }
 
 /** Rooms pin every call to the one shared model — no per-character overrides. */
@@ -380,10 +485,22 @@ export function assembleContext(input: AssembleInput): AssembledContext {
     withinBudget: systemTokens + totalHistory + reserve <= input.numCtx,
   };
 
+  const options: OllamaChatRequest["options"] = {
+    num_ctx: input.numCtx,
+    temperature: input.temperature,
+  };
+  if (input.group) {
+    // group banter loops on its own motifs (Ollama's defaults are 1.1 over a
+    // 64-token window — too short to notice a recycled catchphrase); a firmer
+    // penalty over a wider window keeps the room from chanting itself
+    options.repeat_penalty = 1.15;
+    options.repeat_last_n = 256;
+  }
+
   const request: OllamaChatRequest = {
     model: input.model,
     messages: [{ role: "system", content: system }, ...messages],
-    options: { num_ctx: input.numCtx, temperature: input.temperature },
+    options,
     stream: true,
     think: input.character.thinking,
     keep_alive: "10m",
