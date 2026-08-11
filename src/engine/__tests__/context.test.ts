@@ -105,5 +105,10 @@ describe("resolveModel", () => {
     expect(
       resolveModel(makeRelationship(), makeCharacter({ defaultModel: "" }), "fb"),
     ).toBe("fb");
+    // null is the normal case: characters carry no baked-in model, so the
+    // hearth's settings.defaultModel governs every turn
+    expect(
+      resolveModel(makeRelationship(), makeCharacter({ defaultModel: null }), "fb"),
+    ).toBe("fb");
   });
 });

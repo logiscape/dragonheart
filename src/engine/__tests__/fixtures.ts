@@ -34,8 +34,9 @@ export function makeCharacter(over: Partial<Character> = {}): Character {
     soul: makeSoul(),
     firstMessage: "You came back.",
     greetingDropcap: true,
-    defaultModel: "gemma4:26b",
-    fastModel: "gemma4:e4b",
+    // like production characters: no overrides, follow the hearth settings
+    defaultModel: null,
+    fastModel: null,
     mood: "heart",
     status: "present",
     avatarPath: null,

@@ -186,7 +186,7 @@ const STARTERS: Starter[] = [
   },
 ];
 
-export function starterCharacters(defaultModel: string, fastModel: string | null): CharacterInput[] {
+export function starterCharacters(): CharacterInput[] {
   const now = 0; // placeholder; repo assigns real timestamps
   void now;
   return STARTERS.map((s) => ({
@@ -196,8 +196,9 @@ export function starterCharacters(defaultModel: string, fastModel: string | null
     soul: s.soul,
     firstMessage: s.firstMessage,
     greetingDropcap: true,
-    defaultModel,
-    fastModel,
+    // no baked-in models: starters follow the hearth settings (resolveModel)
+    defaultModel: null,
+    fastModel: null,
     mood: s.mood,
     status: s.status,
     avatarPath: null,

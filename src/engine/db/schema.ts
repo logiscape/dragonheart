@@ -9,7 +9,7 @@
 
 import type { Db } from "../ports";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS meta (
@@ -42,8 +42,8 @@ const STATEMENTS: string[] = [
      soul             TEXT NOT NULL,              -- JSON SoulDocument
      first_message    TEXT NOT NULL DEFAULT '',
      greeting_dropcap INTEGER NOT NULL DEFAULT 1,
-     default_model    TEXT NOT NULL,
-     fast_model       TEXT,
+     default_model    TEXT NOT NULL,              -- '' sentinel = follow settings.defaultModel
+     fast_model       TEXT,                       -- NULL = follow settings.fastModel
      mood             TEXT NOT NULL DEFAULT 'ember',
      status           TEXT NOT NULL DEFAULT 'present',
      avatar_path      TEXT,
@@ -146,6 +146,25 @@ export async function initSchema(db: Db): Promise<void> {
       "schema_version",
       String(SCHEMA_VERSION),
     ]);
+    return;
   }
-  // (future: read rows[0].value and run forward migrations)
+
+  let version = Number(rows[0]!.value) || 1;
+
+  if (version < 2) {
+    // v2: per-character models become opt-in overrides ('' = follow the
+    // hearth's settings.defaultModel). Until now every character was created
+    // with the then-current global model baked in, permanently shadowing the
+    // "Underlying mind" setting; no UI ever set these intentionally, so all
+    // existing values are stale snapshots — clear them.
+    await db.execute(`UPDATE character SET default_model = '', fast_model = NULL`);
+    version = 2;
+  }
+
+  if (version !== Number(rows[0]!.value)) {
+    await db.execute(`UPDATE meta SET value = ? WHERE key = ?`, [
+      String(version),
+      "schema_version",
+    ]);
+  }
 }

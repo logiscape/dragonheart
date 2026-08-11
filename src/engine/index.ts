@@ -90,7 +90,8 @@ export interface CharacterDraftInput {
   traits?: string[];
   voicePreset?: string;
   thinking?: boolean;
-  defaultModel?: string;
+  /** explicit per-character override; omit to follow settings.defaultModel */
+  defaultModel?: string | null;
   fastModel?: string | null;
   avatarPath?: string | null;
 }
@@ -171,7 +172,7 @@ export class Engine {
   async seedStartersIfEmpty(): Promise<void> {
     const existing = await this.repos.listCharacters();
     if (existing.length > 0) return;
-    for (const c of starterCharacters(this.settings.defaultModel, this.settings.fastModel)) {
+    for (const c of starterCharacters()) {
       await this.repos.createCharacter(c);
     }
   }
@@ -184,8 +185,10 @@ export class Engine {
       soul: draft.soul,
       firstMessage: draft.firstMessage ?? "",
       greetingDropcap: draft.greetingDropcap ?? true,
-      defaultModel: draft.defaultModel ?? this.settings.defaultModel,
-      fastModel: draft.fastModel ?? this.settings.fastModel,
+      // null, not a copy of the current settings: a baked-in model would
+      // permanently shadow the hearth's "Underlying mind" in resolveModel
+      defaultModel: draft.defaultModel ?? null,
+      fastModel: draft.fastModel ?? null,
       mood: draft.mood ?? "ember",
       status: draft.status ?? "present",
       avatarPath: draft.avatarPath ?? null,
