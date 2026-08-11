@@ -235,7 +235,7 @@ export class Engine {
   async seedStartersIfEmpty(avatars: Record<string, string> = {}): Promise<void> {
     const existing = await this.repos.listCharacters();
     if (existing.length > 0) return;
-    for (const c of starterCharacters(this.settings.defaultModel, this.settings.fastModel, avatars)) {
+    for (const c of starterCharacters(avatars)) {
       const created = await this.repos.createCharacter(c);
       for (const l of starterLore(created.name, created.id)) {
         await this.repos.createLore(l);
@@ -251,8 +251,10 @@ export class Engine {
       soul: draft.soul,
       firstMessage: draft.firstMessage ?? "",
       greetingDropcap: draft.greetingDropcap ?? true,
-      defaultModel: draft.defaultModel ?? this.settings.defaultModel,
-      fastModel: draft.fastModel ?? this.settings.fastModel,
+      // null, not a copy of the current settings: a baked-in model would
+      // permanently shadow the hearth's "Underlying mind" in resolveModel
+      defaultModel: draft.defaultModel ?? null,
+      fastModel: draft.fastModel ?? null,
       mood: draft.mood ?? "ember",
       status: draft.status ?? "present",
       avatarPath: draft.avatarPath ?? null,

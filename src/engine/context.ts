@@ -514,7 +514,12 @@ export function assembleContext(input: AssembleInput): AssembledContext {
   };
 }
 
-/** Resolve which model a turn should use. */
+/**
+ * Resolve which model a 1:1 turn should use: bond override → character
+ * override → the hearth's settings.defaultModel. Overrides are opt-in and
+ * normally null/'' , so changing "Underlying mind" takes effect on the very
+ * next turn.
+ */
 export function resolveModel(
   relationship: Relationship,
   character: Character,

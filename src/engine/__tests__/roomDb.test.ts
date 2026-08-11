@@ -38,6 +38,11 @@ describe.skipIf(!hasNodeSqlite())("schema v3 migration", () => {
     await db.execute(
       `INSERT INTO memory (id, relationship_id, content, created_at, updated_at) VALUES ('mem1','r1','tea',1,1)`,
     );
+    // a pre-v4 character with the then-current models baked in at creation
+    await db.execute(
+      `INSERT INTO character (id, name, soul, default_model, fast_model, created_at, updated_at)
+       VALUES ('ch1','Elara','{}','gemma4:26b','gemma4:e4b',1,1)`,
+    );
 
     await initSchema(db);
 
@@ -56,6 +61,10 @@ describe.skipIf(!hasNodeSqlite())("schema v3 migration", () => {
     expect(mems[0]?.roomId).toBeNull();
     // the participant table exists and is queryable
     expect(await repos.listParticipants("c1")).toEqual([]);
+    // v4 cleared the baked-in models: the character follows the hearth settings
+    const migratedChar = await repos.getCharacter("ch1");
+    expect(migratedChar?.defaultModel).toBeNull();
+    expect(migratedChar?.fastModel).toBeNull();
   });
 
   it("is idempotent — initSchema can run on every boot", async () => {

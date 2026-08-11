@@ -87,9 +87,9 @@ export interface Character {
   firstMessage: string;
   /** render the greeting with an illuminated drop-cap */
   greetingDropcap: boolean;
-  /** main model for one-on-one depth, e.g. "gemma4:26b" */
-  defaultModel: string;
-  /** optional fast model for low-latency/ensemble, e.g. "gemma4:e4b" */
+  /** per-character model override; null = follow settings.defaultModel */
+  defaultModel: string | null;
+  /** per-character fast-model override; null = follow settings.fastModel */
   fastModel: string | null;
   mood: Mood;
   status: CharacterStatus;

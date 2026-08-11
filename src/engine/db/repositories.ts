@@ -196,7 +196,7 @@ export class Repos {
       }),
       firstMessage: String(r.first_message ?? ""),
       greetingDropcap: b(r.greeting_dropcap),
-      defaultModel: String(r.default_model),
+      defaultModel: r.default_model ? String(r.default_model) : null,
       fastModel: r.fast_model ? String(r.fast_model) : null,
       mood: String(r.mood ?? "ember") as Character["mood"],
       status: String(r.status ?? "present") as Character["status"],
@@ -230,7 +230,7 @@ export class Repos {
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         c.id, c.name, c.epithet, c.blurb, j(c.soul), c.firstMessage, ib(c.greetingDropcap),
-        c.defaultModel, c.fastModel, c.mood, c.status, c.avatarPath, j(c.traits), c.voicePreset,
+        c.defaultModel ?? "", c.fastModel, c.mood, c.status, c.avatarPath, j(c.traits), c.voicePreset,
         ib(c.thinking), c.createdAt, c.updatedAt,
       ],
     );
@@ -243,7 +243,7 @@ export class Repos {
         default_model=?, fast_model=?, mood=?, status=?, avatar_path=?, traits=?, voice_preset=?,
         thinking=?, updated_at=? WHERE id=?`,
       [
-        c.name, c.epithet, c.blurb, j(c.soul), c.firstMessage, ib(c.greetingDropcap), c.defaultModel,
+        c.name, c.epithet, c.blurb, j(c.soul), c.firstMessage, ib(c.greetingDropcap), c.defaultModel ?? "",
         c.fastModel, c.mood, c.status, c.avatarPath, j(c.traits), c.voicePreset, ib(c.thinking),
         this.clock.now(), c.id,
       ],

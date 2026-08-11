@@ -7,7 +7,7 @@ import type { LoreEntry } from "../types";
 
 describe("starterCharacters", () => {
   it("ships Elara and the Fellowship of the Hearth", () => {
-    const chars = starterCharacters("gemma4:26b", "gemma4:e4b");
+    const chars = starterCharacters();
     expect(chars.map((c) => c.name)).toEqual([
       "Elara Vance",
       "Jax Sterling",
@@ -19,8 +19,15 @@ describe("starterCharacters", () => {
     expect(elara.soul.voice).toContain("prepare the vessel");
   });
 
+  it("bakes in no models, so starters always follow the hearth settings", () => {
+    for (const c of starterCharacters()) {
+      expect(c.defaultModel, c.name).toBeNull();
+      expect(c.fastModel, c.name).toBeNull();
+    }
+  });
+
   it("gives every starter a full soul: registers, examples, and lore", () => {
-    for (const c of starterCharacters("m", null)) {
+    for (const c of starterCharacters()) {
       expect(c.soul.coreIdentity.length, c.name).toBeGreaterThan(0);
       expect(c.soul.wounds.length, c.name).toBeGreaterThan(0);
       expect(c.soul.contradiction.length, c.name).toBeGreaterThan(0);
@@ -32,7 +39,7 @@ describe("starterCharacters", () => {
   });
 
   it("gives every friend lore about the rest of the Fellowship", () => {
-    for (const c of starterCharacters("m", null)) {
+    for (const c of starterCharacters()) {
       const lore = starterLore(c.name, "x");
       const fellowship = lore.find((l) => l.keys.includes("fellowship"));
       expect(fellowship, c.name).toBeDefined();
@@ -47,15 +54,15 @@ describe("starterCharacters", () => {
   });
 
   it("wires avatars by name and defaults to null", () => {
-    const withAvatar = starterCharacters("m", null, { "Elara Vance": "data:image/jpeg;base64,x" });
+    const withAvatar = starterCharacters({ "Elara Vance": "data:image/jpeg;base64,x" });
     expect(withAvatar[0]!.avatarPath).toBe("data:image/jpeg;base64,x");
     expect(withAvatar[1]!.avatarPath).toBeNull();
-    const without = starterCharacters("m", null);
+    const without = starterCharacters();
     expect(without[0]!.avatarPath).toBeNull();
   });
 
   it("renders Elara's soul with shifting registers, not a constant epic voice", () => {
-    const elara = starterCharacters("m", null)[0]!;
+    const elara = starterCharacters()[0]!;
     const char = makeCharacter({ name: elara.name, epithet: elara.epithet, soul: elara.soul });
     const prompt = soulToPrompt(char);
     expect(prompt).toContain("Elara Vance");

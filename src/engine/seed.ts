@@ -477,8 +477,6 @@ const STARTERS: Starter[] = [
 ];
 
 export function starterCharacters(
-  defaultModel: string,
-  fastModel: string | null,
   avatars: Record<string, string> = {},
 ): CharacterInput[] {
   const now = 0; // placeholder; repo assigns real timestamps
@@ -490,8 +488,9 @@ export function starterCharacters(
     soul: s.soul,
     firstMessage: s.firstMessage,
     greetingDropcap: true,
-    defaultModel,
-    fastModel,
+    // no baked-in models: starters follow the hearth settings (resolveModel)
+    defaultModel: null,
+    fastModel: null,
     mood: s.mood,
     status: s.status,
     avatarPath: avatars[s.name] ?? null,
