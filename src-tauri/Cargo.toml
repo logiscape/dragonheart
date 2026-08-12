@@ -1,6 +1,6 @@
 [package]
 name = "dragon-heart"
-version = "1.0.0"
+version = "1.0.1"
 description = "A warm, local space for being with AI characters who remember you."
 authors = ["Josh Abbott"]
 license = "MIT"
