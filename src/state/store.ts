@@ -8,11 +8,6 @@
    ============================================================ */
 
 import React, { useContext, useSyncExternalStore } from "react";
-import elaraAvatar from "@assets/elara.jpg?inline";
-import jaxAvatar from "@assets/jax.jpg?inline";
-import silasAvatar from "@assets/silas.jpg?inline";
-import miraAvatar from "@assets/mira.jpg?inline";
-import leoAvatar from "@assets/leo.jpg?inline";
 import type { TauriOllama } from "@adapters/tauriOllama";
 import { Engine, DEFAULT_CASCADE } from "@engine/index";
 import type {
@@ -33,14 +28,13 @@ import { RoomSession, type Visibility } from "./roomSession";
 
 export type View = "welcome" | "hall" | "conversation" | "create" | "room";
 
-/** Portraits for seeded starters, inlined as data URLs so they survive rebuilds. */
-const STARTER_AVATARS: Record<string, string> = {
-  "Elara Vance": elaraAvatar,
-  "Jax Sterling": jaxAvatar,
-  "Silas Thorne": silasAvatar,
-  "Mira Chen": miraAvatar,
-  "Leo Aris": leoAvatar,
-};
+/**
+ * Portraits for seeded starters, keyed by character name. The Graywatch
+ * starters ship portrait-less (the Hall renders their illuminated monogram);
+ * to add art, drop an image in src/assets and wire it here as an
+ * `?inline` import, e.g. `"Sera Vane": seraAvatar`.
+ */
+const STARTER_AVATARS: Record<string, string> = {};
 
 export interface AppState {
   ready: boolean;

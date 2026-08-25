@@ -5,18 +5,15 @@ import { soulToPrompt, voiceExamplesToPrompt } from "../soul";
 import { makeCharacter } from "./fixtures";
 import type { LoreEntry } from "../types";
 
+/** The five who share the Graywatch universe; Spark stands outside it. */
+const GRAYWATCH_CIRCLE = ["Sera Vane", "Bram Holt", "Odelle", "Wren", "Zynthesis"];
+
 describe("starterCharacters", () => {
-  it("ships Elara and the Fellowship of the Hearth", () => {
+  it("ships the Graywatch circle and Spark", () => {
     const chars = starterCharacters();
-    expect(chars.map((c) => c.name)).toEqual([
-      "Elara Vance",
-      "Jax Sterling",
-      "Silas Thorne",
-      "Mira Chen",
-      "Leo Aris",
-    ]);
-    const elara = chars[0]!;
-    expect(elara.soul.voice).toContain("prepare the vessel");
+    expect(chars.map((c) => c.name)).toEqual([...GRAYWATCH_CIRCLE, "Spark"]);
+    const sera = chars[0]!;
+    expect(sera.soul.voice).toContain("The sea isn't going anywhere");
   });
 
   it("bakes in no models, so starters always follow the hearth settings", () => {
@@ -38,35 +35,46 @@ describe("starterCharacters", () => {
     }
   });
 
-  it("gives every friend lore about the rest of the Fellowship", () => {
-    for (const c of starterCharacters()) {
-      const lore = starterLore(c.name, "x");
-      const fellowship = lore.find((l) => l.keys.includes("fellowship"));
-      expect(fellowship, c.name).toBeDefined();
-      // each character's fellowship entry names the other four
-      const others = ["Elara", "Jax", "Silas", "Mira", "Leo"].filter(
-        (n) => !c.name.includes(n),
+  it("gives every Graywatch character circle lore naming the other four", () => {
+    for (const name of GRAYWATCH_CIRCLE) {
+      const lore = starterLore(name, "x");
+      const circle = lore.find((l) => l.keys.includes("graywatch"));
+      expect(circle, name).toBeDefined();
+      const others = ["Sera", "Bram", "Odelle", "Wren", "Zynthesis"].filter(
+        (n) => !name.includes(n),
       );
       for (const other of others) {
-        expect(fellowship!.content, `${c.name} should know ${other}`).toContain(other);
+        expect(circle!.content, `${name} should know ${other}`).toContain(other);
+      }
+    }
+  });
+
+  it("gives Spark a one-way hook: anomalous records of Graywatch, unknown to the circle", () => {
+    const anomaly = starterLore("Spark", "x").find((l) => l.keys.includes("graywatch"));
+    expect(anomaly).toBeDefined();
+    expect(anomaly!.content).toContain("SHOULD NOT EXIST");
+    // the fantasy five have never heard of Spark
+    for (const name of GRAYWATCH_CIRCLE) {
+      for (const l of starterLore(name, "x")) {
+        expect(l.content, `${name} should not know Spark`).not.toContain("Spark");
       }
     }
   });
 
   it("wires avatars by name and defaults to null", () => {
-    const withAvatar = starterCharacters({ "Elara Vance": "data:image/jpeg;base64,x" });
+    const withAvatar = starterCharacters({ "Sera Vane": "data:image/jpeg;base64,x" });
     expect(withAvatar[0]!.avatarPath).toBe("data:image/jpeg;base64,x");
     expect(withAvatar[1]!.avatarPath).toBeNull();
     const without = starterCharacters();
     expect(without[0]!.avatarPath).toBeNull();
   });
 
-  it("renders Elara's soul with shifting registers, not a constant epic voice", () => {
-    const elara = starterCharacters()[0]!;
-    const char = makeCharacter({ name: elara.name, epithet: elara.epithet, soul: elara.soul });
+  it("renders Sera's soul with shifting registers, not one constant wistful note", () => {
+    const sera = starterCharacters()[0]!;
+    const char = makeCharacter({ name: sera.name, epithet: sera.epithet, soul: sera.soul });
     const prompt = soulToPrompt(char);
-    expect(prompt).toContain("Elara Vance");
-    expect(prompt).toContain("not how she always talks");
+    expect(prompt).toContain("Sera Vane");
+    expect(prompt).toContain("the keeper's voice");
     expect(prompt).toContain("How your voice shifts with the moment");
     // examples render separately as few-shots, not inside the soul
     expect(prompt).not.toContain("Them:");
@@ -77,8 +85,8 @@ describe("starterCharacters", () => {
 });
 
 describe("starterLore", () => {
-  it("binds Elara's lore entries to the created character id", () => {
-    const lore = starterLore("Elara Vance", "char-42");
+  it("binds Sera's lore entries to the created character id", () => {
+    const lore = starterLore("Sera Vane", "char-42");
     expect(lore.length).toBeGreaterThan(0);
     for (const l of lore) {
       expect(l.scope).toBe("character");
@@ -91,16 +99,19 @@ describe("starterLore", () => {
     expect(starterLore("Unknown", "char-1")).toEqual([]);
   });
 
-  it("fires her dragon lore on-topic and stays silent off-topic", () => {
+  it("fires her lighthouse lore on-topic and stays silent off-topic", () => {
     const now = 1000;
-    const entries: LoreEntry[] = starterLore("Elara Vance", "char-42").map((l, i) => ({
+    const entries: LoreEntry[] = starterLore("Sera Vane", "char-42").map((l, i) => ({
       ...l,
       id: `lore-${i}`,
       createdAt: now,
       updatedAt: now,
     }));
-    const onTopic = triggerByKeyword(entries, "Tell me about dragon myths from Wales");
-    expect(onTopic.some((e) => e.content.includes("Y Ddraig Goch"))).toBe(true);
+    const onTopic = triggerByKeyword(
+      entries,
+      "The storm is rising — do you think the lamp will hold until morning?",
+    );
+    expect(onTopic.some((e) => e.content.includes("ninety-two steps"))).toBe(true);
     const offTopic = triggerByKeyword(entries, "How was your day at the coffee shop?");
     expect(offTopic).toEqual([]);
   });
