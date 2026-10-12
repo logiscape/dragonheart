@@ -1,7 +1,7 @@
 /* Engine room API end-to-end against in-memory sqlite + a scripted Ollama
    transport (no live server). Covers the speaker turn, model pinning, tagged
    rollup fan-out, affect, aborts, and room-born memories recalled in 1:1. */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { Engine, TurnAbortedError } from "../index";
 import type { OllamaTransport } from "../ports";
 import type { OllamaChatChunk, OllamaChatRequest } from "../types";
@@ -278,9 +278,34 @@ describe.skipIf(!hasNodeSqlite())("engine rooms", () => {
     // and a later 1:1 with Elara recalls the room-born fact
     const view = await engine.openCharacter(elara.id);
     transport.push("You mentioned dreading storms, once.");
+    // This direct turn also launches affect and rollup in the background
+    // (the tiny rollup threshold is still active). Supply both responses,
+    // selecting by request rather than relying on their scheduling order.
+    const directAffect = "I want Robin to feel safe through this storm.";
+    const directSummary = "Robin told Elara the storm was back.";
+    const maintenanceReply = (req: OllamaChatRequest): OllamaChatChunk[] => {
+      const affect = req.messages[0]!.content.includes("private inner voice");
+      return [{
+        message: {
+          role: "assistant",
+          content: affect ? directAffect : JSON.stringify({ summary: directSummary, facts: [] }),
+        },
+        done: true,
+      }];
+    };
+    transport.pushChunks(maintenanceReply);
+    transport.pushChunks(maintenanceReply);
     const sendRes = await engine.send(view.conversation.id, "That storm is back.");
     expect(
       sendRes.diagnostics.recalledMemories.some((m) => m.content === "Robin dreads storms."),
     ).toBe(true);
+    // Wait for and assert the background writes so failures cannot hide behind
+    // a passing foreground assertion or spill into a later test's stderr.
+    await vi.waitFor(async () => {
+      expect((await engine.getRelationship(view.relationship.id))?.affect).toBe(directAffect);
+      expect((await engine.repos.latestSummary(view.relationship.id))?.content).toBe(directSummary);
+      expect((await engine.repos.getConversation(view.conversation.id))?.lastSummaryThroughMessageId)
+        .toBe(sendRes.user.id);
+    });
   });
 });

@@ -9,7 +9,8 @@
 
 import React, { useContext, useSyncExternalStore } from "react";
 import type { TauriOllama } from "@adapters/tauriOllama";
-import { Engine, DEFAULT_CASCADE } from "@engine/index";
+import { newId } from "@engine/ports";
+import { Engine, TurnAbortedError, DEFAULT_CASCADE } from "@engine/index";
 import type {
   AppSettings,
   Attachment,
@@ -55,6 +56,7 @@ export interface AppState {
   ollamaOnline: boolean;
   models: string[];
   error: string | null;
+  failedSend: { message: Message; error: string } | null;
   /* -------- gatherings (group rooms) --------
      deliberately separate from the 1:1 streaming fields: the room composer
      stays enabled while characters speak — posting mid-cascade is designed */
@@ -71,16 +73,25 @@ function applyTheme(theme: "dark" | "light"): void {
   if (typeof document !== "undefined") document.documentElement.setAttribute("data-theme", theme);
 }
 
-let tempCounter = 0;
+interface DirectRequest {
+  message: Message;
+  controller: AbortController;
+  text: string;
+}
+
 
 export class AppStore {
   private state: AppState;
   private listeners = new Set<() => void>();
   private roomSession: RoomSession | null = null;
+  private navigationEpoch = 0;
+  private directRevision = 0;
+  private directRequests = new Map<string, DirectRequest>();
+  private failedSends = new Map<string, NonNullable<AppState["failedSend"]>>();
 
   constructor(
     readonly engine: Engine,
-    private readonly transport: TauriOllama,
+    private readonly transport: Pick<TauriOllama, "setBaseUrl">,
   ) {
     this.state = {
       ready: false,
@@ -101,6 +112,7 @@ export class AppStore {
       ollamaOnline: false,
       models: [],
       error: null,
+      failedSend: null,
       rooms: [],
       currentRoomId: null,
       roomParticipants: [],
@@ -110,7 +122,10 @@ export class AppStore {
       roomStreamingText: "",
     };
     if (typeof window !== "undefined") {
-      window.addEventListener("beforeunload", () => this.closeRoomSession());
+      window.addEventListener("beforeunload", () => {
+        this.closeRoomSession();
+        for (const request of this.directRequests.values()) request.controller.abort();
+      });
     }
   }
 
@@ -189,83 +204,125 @@ export class AppStore {
   }
 
   gotoHall(): void {
+    ++this.navigationEpoch;
     this.closeRoomSession();
     this.set({ view: "hall", currentCharacterId: null, studioOpen: false });
   }
 
   gotoCreate(): void {
+    ++this.navigationEpoch;
     this.closeRoomSession();
     this.set({ view: "create", currentCharacterId: null, studioOpen: false });
   }
 
   async openCharacter(id: string): Promise<void> {
     this.closeRoomSession();
+    const epoch = ++this.navigationEpoch;
+    let revision = this.directRevision;
     const view = await this.engine.openCharacter(id);
+    // A background reply can finish while the database snapshot is loading.
+    while (revision !== this.directRevision) {
+      revision = this.directRevision;
+      view.messages = await this.engine.getThread(view.conversation.id);
+    }
+    if (epoch !== this.navigationEpoch) return;
+    const request = this.directRequests.get(view.conversation.id);
+    const tail = view.messages[view.messages.length - 1];
+    const failedSend = this.failedSends.get(view.conversation.id) ??
+      (!request && tail?.role === "user" ? { message: tail, error: "This message has no reply yet. Retry or edit it to continue." } : null);
+    if (failedSend) this.failedSends.set(view.conversation.id, failedSend);
+    const pending = request?.message ?? failedSend?.message;
+    const messages = pending
+      ? view.messages.some((m) => m.id === pending.id)
+        ? view.messages.map((m) => m.id === pending.id ? pending : m)
+        : [...view.messages, pending]
+      : view.messages;
     this.set({
       currentCharacterId: id,
       relationship: view.relationship,
       conversation: view.conversation,
-      messages: view.messages,
+      messages,
       view: "conversation",
       studioOpen: false,
-      streaming: false,
-      streamingText: "",
+      streaming: !!request,
+      streamingText: request?.text ?? "",
+      failedSend,
+      error: null,
       thinkingText: "",
       lastRecall: [],
     });
   }
 
   async newConversation(): Promise<void> {
-    if (!this.state.relationship) return;
-    const view = await this.engine.newConversation(this.state.relationship.id);
-    this.set({ conversation: view.conversation, messages: view.messages, lastRecall: [], thinkingText: "" });
+    const relationship = this.state.relationship;
+    if (!relationship) return;
+    const epoch = ++this.navigationEpoch;
+    const view = await this.engine.newConversation(relationship.id);
+    if (epoch !== this.navigationEpoch) return;
+    this.set({ conversation: view.conversation, messages: view.messages, lastRecall: [], thinkingText: "",
+      streaming: false, streamingText: "", failedSend: null, error: null });
+  }
+
+  stopReply(): void {
+    const id = this.state.conversation?.id;
+    if (id) this.directRequests.get(id)?.controller.abort();
+  }
+
+  async retryMessage(content?: string, attachments?: Attachment[]): Promise<void> {
+    const failed = this.state.failedSend;
+    if (!failed) return;
+    await this.runDirectSend({ ...failed.message,
+      content: content?.trim() ?? failed.message.content,
+      attachments: attachments ?? failed.message.attachments });
   }
 
   async sendMessage(content: string, attachments: Attachment[] = []): Promise<void> {
     const conv = this.state.conversation;
-    if (!conv || this.state.streaming) return;
+    if (this.state.view !== "conversation" || !conv || this.state.failedSend) return;
     const trimmed = content.trim();
     if (!trimmed && attachments.length === 0) return;
-
-    const tempUser: Message = {
-      id: `temp-${++tempCounter}`,
-      conversationId: conv.id,
-      role: "user",
-      content: trimmed,
-      attachments,
-      speakerCharacterId: null,
-      tokens: 0,
-      createdAt: Date.now(),
-      summarized: false,
-    };
-    this.set({
-      messages: [...this.state.messages, tempUser],
-      streaming: true,
-      streamingText: "",
-      thinkingText: "",
-      lastRecall: [],
-      error: null,
+    await this.runDirectSend({
+      id: newId(), conversationId: conv.id, role: "user", content: trimmed, attachments,
+      speakerCharacterId: null, tokens: 0, createdAt: Date.now(), summarized: false,
     });
+  }
 
+  private async runDirectSend(message: Message): Promise<void> {
+    const id = message.conversationId;
+    if (this.directRequests.has(id) || (!message.content && !message.attachments.length)) return;
+    const request: DirectRequest = { message, controller: new AbortController(), text: "" };
+    this.directRequests.set(id, request);
+    ++this.directRevision;
+    this.failedSends.delete(id);
+    const visible = () => this.state.view === "conversation" && this.state.conversation?.id === id;
+    const replaceUser = () => [...this.state.messages.filter((m) => m.id !== message.id), message];
+    if (visible()) this.set({ messages: replaceUser(), streaming: true, streamingText: "",
+      thinkingText: "", lastRecall: [], error: null, failedSend: null });
     try {
-      const res = await this.engine.send(conv.id, trimmed, attachments, {
-        onToken: (_d, full) => this.set({ streamingText: full }),
+      const res = await this.engine.send(id, message.content, message.attachments, {
+        userMessageId: message.id,
+        signal: request.controller.signal,
+        onToken: (_d, full) => {
+          if (this.directRequests.get(id) !== request || request.controller.signal.aborted) return;
+          request.text = full;
+          if (visible()) this.set({ streamingText: full });
+        },
       });
-      const base = this.state.messages.filter((m) => m.id !== tempUser.id);
-      this.set({
-        messages: [...base, res.user, res.assistant],
-        streaming: false,
-        streamingText: "",
-        thinkingText: res.thinking,
-        lastRecall: res.diagnostics.recalledMemories,
+      if (visible()) this.set({
+        messages: [...this.state.messages.filter((m) => m.id !== res.user.id && m.id !== res.assistant.id), res.user, res.assistant],
+        streaming: false, streamingText: "", thinkingText: res.thinking,
+        lastRecall: res.diagnostics.recalledMemories, failedSend: null,
       });
     } catch (e) {
-      this.set({
-        streaming: false,
-        streamingText: "",
-        messages: this.state.messages.filter((m) => m.id !== tempUser.id),
-        error: e instanceof Error ? e.message : String(e),
-      });
+      const error = request.controller.signal.aborted || e instanceof TurnAbortedError
+        ? "Reply stopped. Your message is kept; retry or edit it whenever you’re ready."
+        : `The reply could not finish. Check that Ollama is running and the selected model is installed, then retry. ${e instanceof Error ? e.message : String(e)}`;
+      const failedSend = { message, error };
+      this.failedSends.set(id, failedSend);
+      if (visible()) this.set({ streaming: false, streamingText: "", failedSend });
+    } finally {
+      if (this.directRequests.get(id) === request) this.directRequests.delete(id);
+      ++this.directRevision;
     }
   }
 
@@ -295,17 +352,20 @@ export class AppStore {
   }
 
   async openRoom(roomId: string): Promise<void> {
+    const epoch = ++this.navigationEpoch;
     const room = await this.engine.openRoom(roomId);
-    this.enterRoom(room);
+    if (epoch === this.navigationEpoch) this.enterRoom(room);
   }
 
   private enterRoom(room: RoomView): void {
+    ++this.navigationEpoch;
     this.closeRoomSession();
     this.set({
       view: "room",
       currentRoomId: room.conversation.id,
       currentCharacterId: null,
       relationship: null,
+      failedSend: null,
       // drop any lingering 1:1 thread — a Studio opened from the room must
       // never show (or delete) another conversation's scene
       conversation: null,
@@ -350,13 +410,17 @@ export class AppStore {
     });
   }
 
-  async sendRoomMessage(content: string, attachments: Attachment[] = []): Promise<void> {
+  async sendRoomMessage(content: string, attachments: Attachment[] = []): Promise<boolean> {
     const trimmed = content.trim();
-    if (!this.roomSession || (!trimmed && attachments.length === 0)) return;
+    const session = this.roomSession;
+    if (!session || (!trimmed && attachments.length === 0)) return false;
+    this.set({ error: null });
     try {
-      await this.roomSession.postUserMessage(trimmed, attachments);
+      await session.postUserMessage(trimmed, attachments);
+      return true;
     } catch (e) {
-      this.set({ error: e instanceof Error ? e.message : String(e) });
+      if (this.roomSession === session) this.set({ error: e instanceof Error ? e.message : String(e) });
+      return false;
     }
   }
 

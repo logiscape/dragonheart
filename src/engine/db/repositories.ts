@@ -49,7 +49,13 @@ export type MemoryInput = Omit<
 > & { roomId?: string | null };
 export type MessageInput = Omit<Message, "id" | "createdAt" | "speakerCharacterId"> & {
   speakerCharacterId?: string | null;
+  id?: string;
 };
+
+interface RollupPlan {
+  sourceIds: string[];
+  memories: Array<MemoryInput & { id: string }>;
+}
 
 export class Repos {
   constructor(
@@ -420,6 +426,7 @@ export class Repos {
       relationshipId,
     ]);
     for (const c of convs) {
+      await this.db.execute(`DELETE FROM memory_rollup WHERE conversation_id = ?`, [String(c.id)]);
       await this.db.execute(`DELETE FROM message WHERE conversation_id = ?`, [String(c.id)]);
     }
     await this.db.execute(`DELETE FROM conversation WHERE relationship_id = ?`, [relationshipId]);
@@ -594,6 +601,7 @@ export class Repos {
   }
 
   async deleteConversation(id: string): Promise<void> {
+    await this.db.execute(`DELETE FROM memory_rollup WHERE conversation_id = ?`, [id]);
     await this.db.execute(`DELETE FROM message WHERE conversation_id = ?`, [id]);
     await this.db.execute(`DELETE FROM conversation_participant WHERE conversation_id = ?`, [id]);
     // room-scoped continuity summaries die with the room; per-character
@@ -641,7 +649,7 @@ export class Repos {
     const m: Message = {
       ...input,
       speakerCharacterId: input.speakerCharacterId ?? null,
-      id: newId(),
+      id: input.id ?? newId(),
       createdAt: this.clock.now(),
     };
     await this.db.execute(
@@ -649,14 +657,22 @@ export class Repos {
        VALUES (?,?,?,?,?,?,?,?,?)`,
       [m.id, m.conversationId, m.role, m.content, j(m.attachments), m.speakerCharacterId, m.tokens, m.createdAt, ib(m.summarized)],
     );
-    await this.touchConversation(m.conversationId);
+    await this.touchConversation(m.conversationId).catch((e) => console.error("conversation timestamp update failed:", e));
     return m;
   }
 
   async markSummarized(ids: string[]): Promise<void> {
-    for (const id of ids) {
-      await this.db.execute(`UPDATE message SET summarized = 1 WHERE id = ?`, [id]);
-    }
+    if (!ids.length) return;
+    await this.db.execute(
+      `UPDATE message SET summarized = 1 WHERE id IN (${ids.map(() => "?").join(",")})`, ids,
+    );
+  }
+
+  async reviseUserMessage(message: Message): Promise<void> {
+    await this.db.execute(
+      `UPDATE message SET content = ?, attachments = ?, tokens = ? WHERE id = ? AND role = 'user'`,
+      [message.content, j(message.attachments), message.tokens, message.id],
+    );
   }
 
   async deleteMessage(id: string): Promise<void> {
@@ -708,12 +724,12 @@ export class Repos {
     return rows[0] ? this.rowToMemory(rows[0]) : null;
   }
 
-  async createMemory(input: MemoryInput): Promise<Memory> {
+  async createMemory(input: MemoryInput, id = newId()): Promise<Memory> {
     const now = this.clock.now();
     const m: Memory = {
       ...input,
       roomId: input.roomId ?? null,
-      id: newId(),
+      id,
       createdAt: now,
       updatedAt: now,
       lastRecalledAt: null,
@@ -721,13 +737,41 @@ export class Repos {
     await this.db.execute(
       `INSERT INTO memory
        (id, relationship_id, room_id, content, kind, keys, embedding, salience, source_message_ids, pinned, enabled, created_at, updated_at, last_recalled_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
       [
         m.id, relToRow(m.relationshipId), m.roomId, m.content, m.kind, j(m.keys), m.embedding ? j(m.embedding) : null,
         m.salience, j(m.sourceMessageIds), ib(m.pinned), ib(m.enabled), m.createdAt, m.updatedAt, m.lastRecalledAt,
       ],
     );
     return m;
+  }
+
+  /** Journal the exact output before writing it. A retry (including after a
+   * restart) reuses these IDs and never asks the model to regenerate half a batch. */
+  async saveRollup(conversationId: string, sourceIds: string[], memories: MemoryInput[]): Promise<void> {
+    const plan: RollupPlan = { sourceIds, memories: memories.map((m) => ({ ...m, id: newId() })) };
+    await this.db.execute(
+      `INSERT INTO memory_rollup (conversation_id, plan) VALUES (?,?) ON CONFLICT(conversation_id) DO NOTHING`,
+      [conversationId, j(plan)],
+    );
+    await this.resumeRollup(conversationId);
+  }
+
+  async resumeRollup(conversationId: string): Promise<boolean> {
+    const rows = await this.db.select<{ plan: string }>(
+      `SELECT plan FROM memory_rollup WHERE conversation_id = ?`, [conversationId],
+    );
+    if (!rows[0]) return false;
+    const plan = JSON.parse(rows[0].plan) as RollupPlan;
+    for (const m of plan.memories) await this.createMemory(m, m.id);
+    // History only leaves the verbatim context after every replacement is saved.
+    await this.markSummarized(plan.sourceIds);
+    await this.db.execute(
+      `UPDATE conversation SET last_summary_through_message_id = ? WHERE id = ?`,
+      [plan.sourceIds[plan.sourceIds.length - 1], conversationId],
+    );
+    await this.db.execute(`DELETE FROM memory_rollup WHERE conversation_id = ?`, [conversationId]);
+    return true;
   }
 
   async updateMemory(m: Memory): Promise<void> {

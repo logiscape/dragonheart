@@ -10,8 +10,8 @@
 import type { Db, OllamaTransport, Clock } from "./ports";
 import { systemClock } from "./ports";
 import { initSchema } from "./db/schema";
-import { Repos } from "./db/repositories";
-import { OllamaClient } from "./ollama";
+import { Repos, type MemoryInput } from "./db/repositories";
+import { OllamaClient, type ChatResult } from "./ollama";
 import {
   assembleContext,
   resolveModel,
@@ -96,6 +96,9 @@ export interface SendResult {
 
 export interface SendOptions {
   onToken?: (delta: string, full: string) => void;
+  signal?: AbortSignal;
+  /** Stable user-message ID: retries revise the unanswered turn in place. */
+  userMessageId?: string;
 }
 
 // ---------------- group rooms ----------------
@@ -653,6 +656,7 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     if (this.rollupInFlight.has(conversationId)) return;
     this.rollupInFlight.add(conversationId);
     try {
+      if (await this.repos.resumeRollup(conversationId)) return;
       const conversation = await this.repos.getConversation(conversationId);
       if (!conversation || conversation.kind !== "room") return;
       const unsummarized = await this.repos.listUnsummarized(conversationId);
@@ -682,9 +686,11 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
         this.user.displayName,
       );
 
+      if (!summary) throw new Error("Memory summary was empty; history has been preserved.");
+      const memories: MemoryInput[] = [];
       if (summary) {
         const embedding = await this.embed(summary.content);
-        await this.repos.createMemory({
+        memories.push({
           relationshipId: null,
           roomId: conversationId,
           content: summary.content,
@@ -703,7 +709,7 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
         for (const characterId of fact.retainedByIds) {
           const holder = everyone.find((p) => p.character.id === characterId);
           if (!holder) continue;
-          await this.repos.createMemory({
+          memories.push({
             relationshipId: holder.relationship.id,
             roomId: conversationId,
             content: fact.content,
@@ -718,14 +724,7 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
         }
       }
 
-      await this.repos.markSummarized(older.map((m) => m.id));
-      const lastOlder = older[older.length - 1];
-      if (lastOlder) {
-        await this.repos.updateConversation({
-          ...conversation,
-          lastSummaryThroughMessageId: lastOlder.id,
-        });
-      }
+      await this.repos.saveRollup(conversationId, older.map((m) => m.id), memories);
     } finally {
       this.rollupInFlight.delete(conversationId);
     }
@@ -740,7 +739,24 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     opts: SendOptions = {},
   ): Promise<SendResult> {
     const { conversation, relationship, character, persona } = await this.loadBundle(conversationId);
-    const verbatim = await this.repos.listUnsummarized(conversationId);
+    const checkAborted = () => {
+      if (opts.signal?.aborted) throw new TurnAbortedError();
+    };
+    checkAborted();
+    const thread = await this.repos.listMessages(conversationId);
+    const lastInteractionAt = await this.repos.latestMessageTime(relationship.id);
+    const existing = opts.userMessageId ? thread.find((m) => m.id === opts.userMessageId) : undefined;
+    if (existing && (existing.role !== "user" || thread[thread.length - 1]?.id !== existing.id)) {
+      throw new Error("Only the latest unanswered message can be retried.");
+    }
+    const userMsg = existing
+      ? { ...existing, content, attachments, tokens: estimateTokens(content) }
+      : await this.repos.addMessage({
+          id: opts.userMessageId, conversationId, role: "user", content, attachments,
+          tokens: estimateTokens(content), summarized: false,
+        });
+    if (existing) await this.repos.reviseUserMessage(userMsg);
+    const verbatim = (await this.repos.listUnsummarized(conversationId)).filter((m) => m.id !== userMsg.id);
 
     const recentText = [
       verbatim.slice(-4).map((m) => m.content).join("\n"),
@@ -753,9 +769,6 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     // Layer 4 — recall + lore
     const recalled = await this.recall(relationship.id, recentText, queryEmbedding);
     const lore = await this.triggeredLore(character.id, relationship.id, recentText, queryEmbedding);
-
-    // time awareness: when they last exchanged a message, before this turn
-    const lastInteractionAt = await this.repos.latestMessageTime(relationship.id);
 
     const model = resolveModel(relationship, character, this.settings.defaultModel);
     const assembled = assembleContext({
@@ -775,16 +788,25 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
       lastInteractionAt,
     });
 
-    const userMsg = await this.repos.addMessage({
-      conversationId,
-      role: "user",
-      content,
-      attachments,
-      tokens: estimateTokens(content),
-      summarized: false,
-    });
-
-    const result = await this.ollama.chat(assembled.request, opts.onToken);
+    checkAborted();
+    // Native cancellation can take until the next network chunk. Release the
+    // UI immediately, and never persist late output from that transport call.
+    let onAbort: (() => void) | undefined;
+    let result: ChatResult;
+    try {
+      result = await new Promise<ChatResult>((resolve, reject) => {
+        onAbort = () => reject(new TurnAbortedError());
+        opts.signal?.addEventListener("abort", onAbort, { once: true });
+        this.ollama.chat(assembled.request, (delta, full) => {
+          if (!opts.signal?.aborted) opts.onToken?.(delta, full);
+        }, { signal: opts.signal }).then(resolve, reject);
+        if (opts.signal?.aborted) onAbort();
+      });
+    } finally {
+      if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
+    }
+    checkAborted();
+    if (result.doneReason === "cancel") throw new TurnAbortedError();
     const replyText = result.content.trim() || "…";
     const assistantMsg = await this.repos.addMessage({
       conversationId,
@@ -796,7 +818,9 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     });
 
     if (recalled.length) {
-      await this.repos.touchRecalled(recalled.map((m) => m.id), this.clock.now());
+      // A bookkeeping failure must not turn a successfully persisted reply into a failed send.
+      await this.repos.touchRecalled(recalled.map((m) => m.id), this.clock.now())
+        .catch((e) => console.error("recall update failed:", e));
     }
 
     // long-term memory rollup runs in the background; never blocks the reply
@@ -896,7 +920,8 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
     if (this.rollupInFlight.has(conversationId)) return;
     this.rollupInFlight.add(conversationId);
     try {
-      const { conversation, relationship, character } = await this.loadBundle(conversationId);
+      if (await this.repos.resumeRollup(conversationId)) return;
+      const { relationship, character } = await this.loadBundle(conversationId);
       const unsummarized = await this.repos.listUnsummarized(conversationId);
       const historyTokens = unsummarized.reduce((s, m) => s + estimateMessageTokens(m), 0);
       if (!shouldRollup(historyTokens, this.settings.rollupThresholdTokens)) return;
@@ -910,14 +935,17 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
       const { summary, facts } = await summarizeRollup(
         this.ollama,
         model,
+        this.settings.numCtx,
         older,
         character.name,
         this.user.displayName,
       );
+      if (!summary) throw new Error("Memory summary was empty; history has been preserved.");
+      const memories: MemoryInput[] = [];
       const candidates: MemoryCandidate[] = [...(summary ? [summary] : []), ...facts];
       for (const c of candidates) {
         const embedding = await this.embed(c.content);
-        await this.repos.createMemory({
+        memories.push({
           relationshipId: relationship.id,
           content: c.content,
           kind: c.kind,
@@ -929,14 +957,7 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
           enabled: true,
         });
       }
-      await this.repos.markSummarized(older.map((m) => m.id));
-      const lastOlder = older[older.length - 1];
-      if (lastOlder) {
-        await this.repos.updateConversation({
-          ...conversation,
-          lastSummaryThroughMessageId: lastOlder.id,
-        });
-      }
+      await this.repos.saveRollup(conversationId, older.map((m) => m.id), memories);
     } finally {
       this.rollupInFlight.delete(conversationId);
     }

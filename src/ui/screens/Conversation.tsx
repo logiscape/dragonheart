@@ -8,6 +8,7 @@ import {
   Ornament,
   Textarea,
   Icons,
+  Button,
 } from "@ui/ds";
 import { useAppState, useStore } from "@state/store";
 import type { Attachment, Message } from "@engine/index";
@@ -30,7 +31,9 @@ export function Conversation() {
   const character = store.currentCharacter();
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<Attachment[]>([]);
+  const [editingFailure, setEditingFailure] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const firstName = character ? character.name.split(" ")[0] ?? character.name : "";
 
@@ -42,11 +45,13 @@ export function Conversation() {
 
   const send = () => {
     const text = draft.trim();
-    if ((!text && pending.length === 0) || s.streaming) return;
+    if ((!text && pending.length === 0) || s.streaming || (s.failedSend && !editingFailure)) return;
     setDraft("");
     const atts = pending;
     setPending([]);
-    void store.sendMessage(text, atts);
+    if (editingFailure) void store.retryMessage(text, atts);
+    else void store.sendMessage(text, atts);
+    setEditingFailure(false);
   };
 
   const attachImage = async () => {
@@ -122,6 +127,22 @@ export function Conversation() {
 
           {s.messages.map((m, i) => renderMessage(m, i === firstCharacterIdx))}
 
+          {s.failedSend ? (
+            <div role="alert" className="dh-inline-note">
+              <p>{s.failedSend.error}</p>
+              <div className="dh-tagrow">
+                <Button size="sm" disabled={editingFailure} onClick={() => void store.retryMessage()}>Retry reply</Button>
+                <Button size="sm" variant="secondary" onClick={() => {
+                  setDraft(s.failedSend!.message.content);
+                  setPending(s.failedSend!.message.attachments);
+                  setEditingFailure(true);
+                  composerRef.current?.focus();
+                }}>Edit message</Button>
+                <Button size="sm" variant="ghost" onClick={() => store.setStudioOpen(true)}>Open Studio</Button>
+              </div>
+            </div>
+          ) : null}
+
           {s.streaming && s.streamingText ? (
             <MessageBubble
               from="character"
@@ -168,6 +189,7 @@ export function Conversation() {
           <Icons.Quill />
           <div className="dh-composer__field">
             <Textarea
+              ref={composerRef}
               seamless
               autoGrow
               maxRows={3}
@@ -190,13 +212,21 @@ export function Conversation() {
               </IconButton>
             </Tooltip>
           </div>
-          <IconButton label="Send" variant="ember" round onClick={send} disabled={s.streaming}>
-            <Icons.Send />
-          </IconButton>
+          {s.streaming ? (
+            <Button size="sm" variant="secondary" onClick={() => store.stopReply()}>Stop reply</Button>
+          ) : (
+            <IconButton label={editingFailure ? "Send edited message" : "Send"} variant="ember" round onClick={send}
+              disabled={!!s.failedSend && !editingFailure}>
+              <Icons.Send />
+            </IconButton>
+          )}
         </div>
         <p className="dh-composer__hint">
-          {firstName} will remember this conversation. Press Enter to speak.
+          {editingFailure ? "Editing your unanswered message. Send to replace it and retry." : `${firstName} will remember this conversation. Press Enter to speak.`}
         </p>
+        {editingFailure ? <Button size="sm" variant="ghost" onClick={() => {
+          setEditingFailure(false); setDraft(""); setPending([]);
+        }}>Cancel edit</Button> : null}
       </div>
     </main>
   );

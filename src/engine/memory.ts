@@ -108,6 +108,7 @@ Return ONLY JSON:
 export async function summarizeRollup(
   client: OllamaClient,
   model: string,
+  numCtx: number,
   messages: Message[],
   characterName: string,
   userName: string,
@@ -121,10 +122,13 @@ export async function summarizeRollup(
       { role: "system", content: ROLLUP_SYSTEM },
       { role: "user", content: transcript },
     ],
-    options: { temperature: 0.2 },
+    options: { temperature: 0.2, num_ctx: numCtx },
     stream: false,
   });
   const parsed = parseJsonLoose<{ summary?: unknown; facts?: unknown[] }>(result.content);
+  if (!parsed || typeof parsed.summary !== "string" || !Array.isArray(parsed.facts)) {
+    throw new Error("Invalid memory summary; history has been preserved.");
+  }
   const summaryText = typeof parsed?.summary === "string" ? parsed.summary.trim() : "";
   const summary: MemoryCandidate | null = summaryText
     ? { content: summaryText, kind: "summary", keys: [], salience: 0.55, sourceMessageIds: sourceIds }
@@ -291,6 +295,9 @@ export async function summarizeGroupRollup(
     format: buildGroupRollupFormat(names),
   });
   const parsed = parseJsonLoose<{ summary?: unknown; facts?: unknown[] }>(result.content);
+  if (!parsed || typeof parsed.summary !== "string" || !Array.isArray(parsed.facts)) {
+    throw new Error("Invalid memory summary; history has been preserved.");
+  }
   const summaryText = typeof parsed?.summary === "string" ? parsed.summary.trim() : "";
   const summary: MemoryCandidate | null = summaryText
     ? { content: summaryText, kind: "summary", keys: [], salience: 0.55, sourceMessageIds: sourceIds }

@@ -9,7 +9,7 @@
 
 import type { Db } from "../ports";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS meta (
@@ -138,6 +138,11 @@ const STATEMENTS: string[] = [
    )`,
 
   `CREATE INDEX IF NOT EXISTS idx_message_conv ON message (conversation_id, created_at)`,
+  // v5: resumable memory writes; created idempotently for existing databases too.
+  `CREATE TABLE IF NOT EXISTS memory_rollup (
+     conversation_id TEXT PRIMARY KEY,
+     plan TEXT NOT NULL
+   )`,
   `CREATE INDEX IF NOT EXISTS idx_memory_rel ON memory (relationship_id)`,
   `CREATE INDEX IF NOT EXISTS idx_memory_room ON memory (room_id)`,
   `CREATE INDEX IF NOT EXISTS idx_lore_owner ON lore (scope, owner_id)`,
@@ -198,6 +203,9 @@ export async function initSchema(db: Db): Promise<void> {
 
   for (const sql of STATEMENTS) {
     await db.execute(sql);
+  }
+  if (rows.length > 0 && Number(rows[0]!.value) < SCHEMA_VERSION) {
+    await db.execute(`UPDATE meta SET value = ? WHERE key = ?`, [String(SCHEMA_VERSION), "schema_version"]);
   }
   if (rows.length === 0) {
     await db.execute(`INSERT INTO meta (key, value) VALUES (?, ?)`, [

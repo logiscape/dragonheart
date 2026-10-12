@@ -31,6 +31,8 @@ export function Room() {
   const room = s.rooms.find((r) => r.id === s.currentRoomId) ?? null;
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<Attachment[]>([]);
+  const [posting, setPosting] = useState(false);
+  const postingRef = useRef(false);
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -57,15 +59,19 @@ export function Room() {
   const liveSpeaker = speakerOf(s.roomStreamingCharacterId);
   const generating = s.roomPhase === "generating" && !!liveSpeaker;
 
-  const send = () => {
+  const send = async () => {
     const text = draft.trim();
-    if (!text && pending.length === 0) return;
-    setDraft("");
-    setMention(null);
-    const atts = pending;
-    setPending([]);
-    // the room composer is never locked — posting mid-cascade is designed
-    void store.sendRoomMessage(text, atts);
+    if (postingRef.current || (!text && pending.length === 0)) return;
+    postingRef.current = true;
+    setPosting(true);
+    try {
+      if (await store.sendRoomMessage(text, pending)) {
+        setDraft(""); setMention(null); setPending([]);
+      }
+    } finally {
+      postingRef.current = false;
+      setPosting(false);
+    }
   };
 
   const mentionCandidates = mention
@@ -227,6 +233,7 @@ export function Room() {
       </div>
 
       <div className="dh-conv__composer">
+        {s.error ? <p role="alert" className="dh-inline-note">{s.error} Check the connection in Studio. {draft || pending.length ? "Your unsent draft is kept; try sending again when ready." : "You can send another message when ready."}</p> : null}
         {pending.length ? (
           <div className="dh-composer__images">
             {pending.map((a, i) => (
@@ -278,6 +285,7 @@ export function Room() {
               rows={1}
               placeholder="Say something to the room…"
               value={draft}
+              disabled={posting}
               onChange={(e) => {
                 setDraft(e.target.value);
                 refreshMention(e.target);
@@ -314,12 +322,12 @@ export function Room() {
           </div>
           <div className="dh-composer__attach">
             <Tooltip label="Share an image">
-              <IconButton label="Attach image" variant="ghost" onClick={() => void attachImage()}>
+              <IconButton label="Attach image" variant="ghost" disabled={posting} onClick={() => void attachImage()}>
                 <Icons.Image />
               </IconButton>
             </Tooltip>
           </div>
-          <IconButton label="Send" variant="ember" round onClick={send}>
+          <IconButton label="Send" variant="ember" round disabled={posting} onClick={() => void send()}>
             <Icons.Send />
           </IconButton>
         </div>

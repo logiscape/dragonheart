@@ -32,13 +32,13 @@ export function App() {
         </React.Fragment>
       ) : s.view === "room" ? (
         <React.Fragment>
-          <Room />
+          <Room key={s.currentRoomId} />
           {/* a participant's Studio when one was picked; the room's own otherwise */}
           {s.studioOpen ? (s.currentCharacterId ? <Studio /> : <RoomStudio />) : null}
         </React.Fragment>
       ) : (
         <React.Fragment>
-          <Conversation />
+          <Conversation key={s.conversation?.id} />
           {s.studioOpen ? <Studio /> : null}
         </React.Fragment>
       )}

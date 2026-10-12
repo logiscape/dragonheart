@@ -115,7 +115,7 @@ describe.skipIf(!LIVE)("live engine ↔ ollama", () => {
       makeMessage({ role: "user", content: "My sister is getting married in autumn." }),
       makeMessage({ role: "assistant", content: "That's wonderful — autumn weddings are the loveliest." }),
     ];
-    const { summary } = await summarizeRollup(engine.ollama, "gemma4:e4b", msgs, "Elara", "Tester");
+    const { summary } = await summarizeRollup(engine.ollama, "gemma4:e4b", engine.getSettings().numCtx, msgs, "Elara", "Tester");
     expect(summary?.content.length ?? 0).toBeGreaterThan(0);
   }, 120_000);
 });
