@@ -22,11 +22,22 @@ function canned(reply: string) {
 }
 
 describe("rollup validation", () => {
-  it.each(["not JSON", "{}", '{"summary":12,"facts":[]}', '{"summary":"ok","facts":{}}'])
+  it.each(["not JSON", "{}", '{"summary":12,"facts":[]}', '{"summary":"ok","facts":{}}',
+    '{"summary":"ok","facts":"none"}', '{"summary":"ok","facts":false}'])
     ("rejects malformed output in both summarizers: %s", async (reply) => {
       const client = new OllamaClient(canned(reply).transport);
       await expect(summarizeRollup(client, "model", 32768, [makeMessage()], "A", "User")).rejects.toThrow("Invalid memory summary");
       await expect(summarizeGroupRollup(client, "model", 32768, [makeMessage()], [], "User")).rejects.toThrow("Invalid memory summary");
+    });
+  it.each(['{"summary":"They talked."}', '{"summary":"They talked.","facts":null}'])
+    ("accepts a valid summary with missing or null facts in both summarizers: %s", async (reply) => {
+      const client = new OllamaClient(canned(reply).transport);
+      const direct = await summarizeRollup(client, "model", 32768, [makeMessage()], "A", "User");
+      const group = await summarizeGroupRollup(client, "model", 32768, [makeMessage()], [], "User");
+      for (const result of [direct, group]) {
+        expect(result.summary?.content).toBe("They talked.");
+        expect(result.facts).toEqual([]);
+      }
     });
   it("uses the configured context budget for direct rollups", async () => {
     const { transport, requests } = canned('{"summary":"They talked.","facts":[]}');
@@ -36,7 +47,22 @@ describe("rollup validation", () => {
 });
 
 describe.skipIf(!hasNodeSqlite())("rollup recovery", () => {
-  it.each(["malformed", '{"summary":"","facts":[]}'])
+  it.each(['{"summary":"They talked."}', '{"summary":"They talked.","facts":null}'])
+    ("commits a summary-only direct rollup: %s", async (reply) => {
+      const engine = await Engine.create(tryCreateNodeDb()!, canned(reply).transport);
+      await engine.updateSettings({ semanticRecall: false, rollupThresholdTokens: 0, recentVerbatimTurns: 1 });
+      const character = await engine.createCharacter({ name: "A", soul: makeSoul() });
+      const view = await engine.openCharacter(character.id);
+      const sent = await engine.send(view.conversation.id, "Something to keep");
+      await vi.waitFor(async () => {
+        expect((await engine.repos.getConversation(view.conversation.id))!.lastSummaryThroughMessageId)
+          .toBe(sent.user.id);
+      });
+      expect((await engine.listMemories(view.relationship.id)).map((m) => m.content)).toEqual(["They talked."]);
+      expect((await engine.repos.listUnsummarized(view.conversation.id)).map((m) => m.id)).toEqual([sent.assistant.id]);
+    });
+
+  it.each(["malformed", '{"summary":"","facts":[]}', '{"summary":" ","facts":null}', '{"summary":""}'])
     ("does not retire direct history when extraction fails: %s", async (reply) => {
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
@@ -53,7 +79,7 @@ describe.skipIf(!hasNodeSqlite())("rollup recovery", () => {
       } finally { errors.mockRestore(); }
     });
 
-  it.each(["malformed", '{"summary":"","facts":[]}'])
+  it.each(["malformed", '{"summary":"","facts":[]}', '{"summary":" ","facts":null}', '{"summary":""}'])
     ("does not retire room history when extraction fails: %s", async (reply) => {
       const engine = await Engine.create(tryCreateNodeDb()!, canned(reply).transport);
       await engine.updateSettings({ semanticRecall: false, rollupThresholdTokens: 0, recentVerbatimTurns: 1 });

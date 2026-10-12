@@ -688,21 +688,19 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
 
       if (!summary) throw new Error("Memory summary was empty; history has been preserved.");
       const memories: MemoryInput[] = [];
-      if (summary) {
-        const embedding = await this.embed(summary.content);
-        memories.push({
-          relationshipId: null,
-          roomId: conversationId,
-          content: summary.content,
-          kind: summary.kind,
-          keys: summary.keys,
-          embedding,
-          salience: summary.salience,
-          sourceMessageIds: summary.sourceMessageIds,
-          pinned: false,
-          enabled: true,
-        });
-      }
+      const embedding = await this.embed(summary.content);
+      memories.push({
+        relationshipId: null,
+        roomId: conversationId,
+        content: summary.content,
+        kind: summary.kind,
+        keys: summary.keys,
+        embedding,
+        salience: summary.salience,
+        sourceMessageIds: summary.sourceMessageIds,
+        pinned: false,
+        enabled: true,
+      });
       for (const fact of facts) {
         // embed once; the vector depends only on the content
         const embedding = await this.embed(fact.content);
@@ -743,10 +741,12 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
       if (opts.signal?.aborted) throw new TurnAbortedError();
     };
     checkAborted();
-    const thread = await this.repos.listMessages(conversationId);
     const lastInteractionAt = await this.repos.latestMessageTime(relationship.id);
-    const existing = opts.userMessageId ? thread.find((m) => m.id === opts.userMessageId) : undefined;
-    if (existing && (existing.role !== "user" || thread[thread.length - 1]?.id !== existing.id)) {
+    const existing = opts.userMessageId ? await this.repos.getMessage(opts.userMessageId) : null;
+    if (existing && (
+      existing.conversationId !== conversationId || existing.role !== "user" ||
+      await this.repos.latestMessageId(conversationId) !== existing.id
+    )) {
       throw new Error("Only the latest unanswered message can be retried.");
     }
     const userMsg = existing
@@ -942,7 +942,7 @@ exampleDialogue: 2-3 short exchanges showing the voice in practice, each in a di
       );
       if (!summary) throw new Error("Memory summary was empty; history has been preserved.");
       const memories: MemoryInput[] = [];
-      const candidates: MemoryCandidate[] = [...(summary ? [summary] : []), ...facts];
+      const candidates: MemoryCandidate[] = [summary, ...facts];
       for (const c of candidates) {
         const embedding = await this.embed(c.content);
         memories.push({

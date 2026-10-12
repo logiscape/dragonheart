@@ -285,7 +285,7 @@ export function Room() {
               rows={1}
               placeholder="Say something to the room…"
               value={draft}
-              disabled={posting}
+              readOnly={posting}
               onChange={(e) => {
                 setDraft(e.target.value);
                 refreshMention(e.target);

@@ -125,16 +125,17 @@ export async function summarizeRollup(
     options: { temperature: 0.2, num_ctx: numCtx },
     stream: false,
   });
-  const parsed = parseJsonLoose<{ summary?: unknown; facts?: unknown[] }>(result.content);
-  if (!parsed || typeof parsed.summary !== "string" || !Array.isArray(parsed.facts)) {
+  const parsed = parseJsonLoose<{ summary?: unknown; facts?: unknown[] | null }>(result.content);
+  if (!parsed || typeof parsed.summary !== "string" ||
+    (parsed.facts != null && !Array.isArray(parsed.facts))) {
     throw new Error("Invalid memory summary; history has been preserved.");
   }
-  const summaryText = typeof parsed?.summary === "string" ? parsed.summary.trim() : "";
+  const summaryText = parsed.summary.trim();
   const summary: MemoryCandidate | null = summaryText
     ? { content: summaryText, kind: "summary", keys: [], salience: 0.55, sourceMessageIds: sourceIds }
     : null;
   const facts = parseCandidates(
-    JSON.stringify({ memories: Array.isArray(parsed?.facts) ? parsed!.facts : [] }),
+    JSON.stringify({ memories: parsed.facts ?? [] }),
     sourceIds,
   );
   return { summary, facts };
@@ -294,16 +295,17 @@ export async function summarizeGroupRollup(
     think: false,
     format: buildGroupRollupFormat(names),
   });
-  const parsed = parseJsonLoose<{ summary?: unknown; facts?: unknown[] }>(result.content);
-  if (!parsed || typeof parsed.summary !== "string" || !Array.isArray(parsed.facts)) {
+  const parsed = parseJsonLoose<{ summary?: unknown; facts?: unknown[] | null }>(result.content);
+  if (!parsed || typeof parsed.summary !== "string" ||
+    (parsed.facts != null && !Array.isArray(parsed.facts))) {
     throw new Error("Invalid memory summary; history has been preserved.");
   }
-  const summaryText = typeof parsed?.summary === "string" ? parsed.summary.trim() : "";
+  const summaryText = parsed.summary.trim();
   const summary: MemoryCandidate | null = summaryText
     ? { content: summaryText, kind: "summary", keys: [], salience: 0.55, sourceMessageIds: sourceIds }
     : null;
   const facts = parseTaggedFacts(
-    Array.isArray(parsed?.facts) ? parsed!.facts : [],
+    parsed.facts ?? [],
     participants,
     sourceIds,
   );

@@ -629,6 +629,19 @@ export class Repos {
     };
   }
 
+  async getMessage(id: string): Promise<Message | null> {
+    const rows = await this.db.select<Row>(`SELECT * FROM message WHERE id = ?`, [id]);
+    return rows[0] ? this.rowToMessage(rows[0]) : null;
+  }
+
+  async latestMessageId(conversationId: string): Promise<string | null> {
+    const rows = await this.db.select<{ id: string }>(
+      `SELECT id FROM message WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      [conversationId],
+    );
+    return rows[0]?.id ?? null;
+  }
+
   async listMessages(conversationId: string): Promise<Message[]> {
     const rows = await this.db.select<Row>(
       `SELECT * FROM message WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC`,
